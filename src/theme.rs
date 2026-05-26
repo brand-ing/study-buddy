@@ -406,6 +406,50 @@ impl container::StyleSheet for OuterBorder {
     }
 }
 
+pub struct SettingsCard(pub Palette);
+impl container::StyleSheet for SettingsCard {
+    type Style = iced::Theme;
+    fn appearance(&self, _: &iced::Theme) -> container::Appearance {
+        container::Appearance {
+            background: Some(Background::Color(self.0.surface)),
+            border: Border { radius: 8.0.into(), color: self.0.surface2, width: 1.0 },
+            ..Default::default()
+        }
+    }
+}
+
+pub struct HoverBar(pub Palette);
+impl container::StyleSheet for HoverBar {
+    type Style = iced::Theme;
+    fn appearance(&self, _: &iced::Theme) -> container::Appearance {
+        container::Appearance {
+            background: Some(Background::Color(self.0.surface)),
+            border: Border {
+                radius: [10.0, 10.0, 0.0, 0.0].into(),
+                color: Color::TRANSPARENT,
+                width: 0.0,
+            },
+            ..Default::default()
+        }
+    }
+}
+
+pub struct Sidebar(pub Palette);
+impl container::StyleSheet for Sidebar {
+    type Style = iced::Theme;
+    fn appearance(&self, _: &iced::Theme) -> container::Appearance {
+        container::Appearance {
+            background: Some(Background::Color(self.0.surface)),
+            border: Border {
+                radius: [10.0, 0.0, 0.0, 10.0].into(),
+                color: Color::TRANSPARENT,
+                width: 0.0,
+            },
+            ..Default::default()
+        }
+    }
+}
+
 pub struct PinBtn { pub p: Palette, pub active: bool }
 impl button::StyleSheet for PinBtn {
     type Style = iced::Theme;
