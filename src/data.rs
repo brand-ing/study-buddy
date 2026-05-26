@@ -32,9 +32,9 @@ impl Phase {
 
     pub fn label(&self) -> &'static str {
         match self {
-            Phase::Work       => "🎯  Work",
-            Phase::ShortBreak => "☕  Short Break",
-            Phase::LongBreak  => "🌿  Long Break",
+            Phase::Work       => "▸  Work",
+            Phase::ShortBreak => "◌  Short Break",
+            Phase::LongBreak  => "◎  Long Break",
         }
     }
 }
