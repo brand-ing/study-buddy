@@ -657,8 +657,15 @@ fn legend_cell(mins: u32, p: Palette) -> Element<'static, Message> {
 
 // ── Entry Point ───────────────────────────────────────────────────────────
 
+const NOTO_SANS: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
+
 fn main() -> iced::Result {
     App::run(Settings {
+        fonts: vec![NOTO_SANS.into()],
+        default_font: iced::Font {
+            family: iced::font::Family::Name("Noto Sans"),
+            ..iced::Font::DEFAULT
+        },
         window: window::Settings {
             size: iced::Size::new(780.0, 540.0),
             min_size: Some(iced::Size::new(620.0, 440.0)),
