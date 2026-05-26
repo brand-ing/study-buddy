@@ -324,3 +324,84 @@ impl progress_bar::StyleSheet for ProgressStyle {
         }
     }
 }
+
+// ── Titlebar / Navigation ─────────────────────────────────────────────────
+
+/// Invisible drag area — no visual change, just captures clicks for window drag.
+pub struct DragBtn;
+impl button::StyleSheet for DragBtn {
+    type Style = iced::Theme;
+    fn active(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: None,
+            text_color: Color::TRANSPARENT,
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn hovered(&self, s: &iced::Theme) -> button::Appearance { self.active(s) }
+    fn pressed(&self, s: &iced::Theme) -> button::Appearance { self.active(s) }
+    fn disabled(&self, s: &iced::Theme) -> button::Appearance { self.active(s) }
+}
+
+pub struct TabBtn { pub p: Palette, pub active: bool }
+impl button::StyleSheet for TabBtn {
+    type Style = iced::Theme;
+    fn active(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: if self.active {
+                Some(Background::Color(Color { a: 0.13, ..self.p.accent }))
+            } else {
+                None
+            },
+            text_color: if self.active { self.p.accent } else { self.p.subtext },
+            border: Border { radius: 6.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn hovered(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: Some(Background::Color(Color { a: 0.08, ..self.p.accent })),
+            text_color: self.p.accent,
+            border: Border { radius: 6.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn pressed(&self, s: &iced::Theme) -> button::Appearance { self.hovered(s) }
+    fn disabled(&self, s: &iced::Theme) -> button::Appearance { self.active(s) }
+}
+
+pub struct CloseBtn(pub Palette);
+impl button::StyleSheet for CloseBtn {
+    type Style = iced::Theme;
+    fn active(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: None,
+            text_color: self.0.subtext,
+            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn hovered(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: Some(Background::Color(Color { r: 0.85, g: 0.18, b: 0.18, a: 0.88 })),
+            text_color: Color::WHITE,
+            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn pressed(&self, s: &iced::Theme) -> button::Appearance { self.hovered(s) }
+    fn disabled(&self, s: &iced::Theme) -> button::Appearance { self.active(s) }
+}
+
+pub struct OuterBorder(pub Palette);
+impl container::StyleSheet for OuterBorder {
+    type Style = iced::Theme;
+    fn appearance(&self, _: &iced::Theme) -> container::Appearance {
+        container::Appearance {
+            background: Some(Background::Color(self.0.bg)),
+            border: Border { radius: 0.0.into(), color: self.0.surface2, width: 1.0 },
+            ..Default::default()
+        }
+    }
+}
