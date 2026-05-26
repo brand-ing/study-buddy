@@ -657,13 +657,16 @@ fn legend_cell(mins: u32, p: Palette) -> Element<'static, Message> {
 
 // ── Entry Point ───────────────────────────────────────────────────────────
 
-const NOTO_SANS: &[u8] = include_bytes!("../assets/fonts/NotoSans-Regular.ttf");
-
 fn main() -> iced::Result {
+    let mut fonts: Vec<std::borrow::Cow<'static, [u8]>> = vec![];
+    if let Ok(bytes) = std::fs::read("C:\\Windows\\Fonts\\seguisym.ttf") {
+        fonts.push(std::borrow::Cow::Owned(bytes));
+    }
+
     App::run(Settings {
-        fonts: vec![NOTO_SANS.into()],
+        fonts,
         default_font: iced::Font {
-            family: iced::font::Family::Name("Noto Sans"),
+            family: iced::font::Family::Name("Segoe UI Symbol"),
             ..iced::Font::DEFAULT
         },
         window: window::Settings {
