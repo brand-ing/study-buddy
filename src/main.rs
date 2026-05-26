@@ -268,8 +268,8 @@ fn top_bar(p: Palette, show_controls: bool, always_on_top: bool) -> Element<'sta
 
     // Always-on-top toggle (left)
     let pin = button(
-        text("⊤")
-            .size(13)
+        text("📌")
+            .size(14)
             .style(iced_theme::Text::Color(if always_on_top { p.accent } else { p.subtext })),
     )
     .padding([0, 12])
@@ -439,7 +439,7 @@ fn timer_view(p: Palette, timer: &Pomodoro) -> Element<Message> {
     ])
     .align_items(Alignment::Center);
 
-    let toggle_label = if timer.running { "⏸  Pause" } else { "▶  Start" };
+    let toggle_label = if timer.running { "⏸  Pause" } else { "▶︎  Start" };
     let toggle = button(text(toggle_label).size(14))
         .padding([10, 28])
         .style(iced_theme::Button::Custom(Box::new(AccentBtn(p))))
