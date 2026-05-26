@@ -15,7 +15,8 @@ use iced::{time, window};
 use storage::SaveData;
 use theme::{
     AccentBtn, AppBg, CloseBtn, DeleteBtn, DotCell, DragBtn, Flat, GhostBtn, HeatCell,
-    OuterBorder, Palette, ProgressStyle, Surface, TabBtn, TaskCheckBtn, TaskInput, TimeOfDay,
+    OuterBorder, Palette, PinBtn, ProgressStyle, Surface, TabBtn, TaskCheckBtn, TaskInput,
+    TimeOfDay,
 };
 
 const APP_NAME: &str = "focus";
@@ -39,6 +40,7 @@ struct App {
     timer: Pomodoro,
     heatmap: Heatmap,
     active_tab: Tab,
+    always_on_top: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +58,7 @@ enum Message {
     TitleBarDrag,
     WindowClose,
     WindowMinimize,
+    ToggleAlwaysOnTop,
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -77,6 +80,7 @@ impl Application for App {
                 timer: Pomodoro::new(s.pomodoros_done),
                 heatmap: s.heatmap,
                 active_tab: Tab::Timer,
+                always_on_top: false,
             },
             Command::none(),
         )
@@ -141,6 +145,15 @@ impl Application for App {
             Message::TitleBarDrag => return window::drag(window::Id::MAIN),
             Message::WindowClose  => return window::close(window::Id::MAIN),
             Message::WindowMinimize => return window::minimize(window::Id::MAIN, true),
+            Message::ToggleAlwaysOnTop => {
+                self.always_on_top = !self.always_on_top;
+                let level = if self.always_on_top {
+                    window::Level::AlwaysOnTop
+                } else {
+                    window::Level::Normal
+                };
+                return window::change_level(window::Id::MAIN, level);
+            }
         }
         Command::none()
     }
@@ -155,7 +168,7 @@ impl Application for App {
         };
 
         let body = column(vec![
-            titlebar(p, self.active_tab),
+            titlebar(p, self.active_tab, self.always_on_top),
             tab_content,
         ]);
 
@@ -180,7 +193,7 @@ impl App {
 
 // ── Titlebar ──────────────────────────────────────────────────────────────
 
-fn titlebar(p: Palette, active: Tab) -> Element<'static, Message> {
+fn titlebar(p: Palette, active: Tab, always_on_top: bool) -> Element<'static, Message> {
     let now = chrono::Local::now();
     let time_str = format!("{:02}:{:02}", now.hour(), now.minute());
 
@@ -228,6 +241,16 @@ fn titlebar(p: Palette, active: Tab) -> Element<'static, Message> {
     .style(iced_theme::Button::Custom(Box::new(DragBtn)))
     .on_press(Message::TitleBarDrag);
 
+    // Always-on-top pin
+    let pin = button(
+        text("⊤")
+            .size(13)
+            .style(iced_theme::Text::Color(if always_on_top { p.accent } else { p.subtext })),
+    )
+    .padding([0, 9])
+    .style(iced_theme::Button::Custom(Box::new(PinBtn { p, active: always_on_top })))
+    .on_press(Message::ToggleAlwaysOnTop);
+
     // Window controls
     let minimize = button(text("−").size(15).style(iced_theme::Text::Color(p.subtext)))
         .padding([0, 10])
@@ -244,6 +267,7 @@ fn titlebar(p: Palette, active: Tab) -> Element<'static, Message> {
         tabs.into(),
         fill.into(),
         tod_time.into(),
+        pin.into(),
         minimize.into(),
         close.into(),
     ])
@@ -526,6 +550,7 @@ fn main() -> iced::Result {
             size: iced::Size::new(780.0, 540.0),
             min_size: Some(iced::Size::new(620.0, 440.0)),
             decorations: false,
+            transparent: true,
             ..Default::default()
         },
         ..Default::default()

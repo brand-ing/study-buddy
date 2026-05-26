@@ -147,7 +147,7 @@ impl application::StyleSheet for AppBg {
     type Style = iced::Theme;
     fn appearance(&self, _: &iced::Theme) -> application::Appearance {
         application::Appearance {
-            background_color: self.0.bg,
+            background_color: Color::TRANSPARENT, // outer container draws the bg with rounded corners
             text_color: self.0.text,
         }
     }
@@ -400,8 +400,35 @@ impl container::StyleSheet for OuterBorder {
     fn appearance(&self, _: &iced::Theme) -> container::Appearance {
         container::Appearance {
             background: Some(Background::Color(self.0.bg)),
-            border: Border { radius: 0.0.into(), color: self.0.surface2, width: 1.0 },
+            border: Border { radius: 10.0.into(), color: self.0.surface2, width: 1.0 },
             ..Default::default()
         }
     }
+}
+
+pub struct PinBtn { pub p: Palette, pub active: bool }
+impl button::StyleSheet for PinBtn {
+    type Style = iced::Theme;
+    fn active(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: if self.active {
+                Some(Background::Color(Color { a: 0.13, ..self.p.accent }))
+            } else {
+                None
+            },
+            text_color: if self.active { self.p.accent } else { self.p.subtext },
+            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn hovered(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: Some(Background::Color(Color { a: 0.08, ..self.p.accent })),
+            text_color: self.p.accent,
+            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn pressed(&self, s: &iced::Theme) -> button::Appearance { self.hovered(s) }
+    fn disabled(&self, s: &iced::Theme) -> button::Appearance { self.active(s) }
 }
