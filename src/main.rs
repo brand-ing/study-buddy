@@ -15,7 +15,7 @@ use iced::{time, window};
 use storage::SaveData;
 use theme::{
     AccentBtn, AppBg, CloseBtn, DeleteBtn, DotCell, Flat, GhostBtn, HeatCell, OuterBorder,
-    Palette, PinBtn, ProgressStyle, Sidebar, TabBtn, TaskCheckBtn, TaskInput, TimeOfDay,
+    Palette, PinBtn, ProgressStyle, TaskCheckBtn, TaskInput, TimeOfDay,
 };
 
 const APP_NAME: &str = "focus";
@@ -29,6 +29,23 @@ enum Tab {
     Heatmap,
 }
 
+impl Tab {
+    fn prev(self) -> Self {
+        match self {
+            Tab::Timer => Tab::Heatmap,
+            Tab::Tasks => Tab::Timer,
+            Tab::Heatmap => Tab::Tasks,
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            Tab::Timer => Tab::Tasks,
+            Tab::Tasks => Tab::Heatmap,
+            Tab::Heatmap => Tab::Timer,
+        }
+    }
+}
+
 // ── State ─────────────────────────────────────────────────────────────────
 
 struct App {
@@ -40,10 +57,9 @@ struct App {
     heatmap: Heatmap,
     active_tab: Tab,
     always_on_top: bool,
-    // Countdown in seconds: >0 = controls visible, 0 = hidden.
-    // Reset to 6 on mouse-near-top; decrements each Tick.
     hide_in_ticks: u8,
-    sidebar_collapsed: bool,
+    hover_left: bool,
+    hover_right: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +79,8 @@ enum Message {
     ToggleAlwaysOnTop,
     MouseMoved(iced::Point),
     MouseLeft,
-    SidebarToggle,
+    HoverLeft(bool),
+    HoverRight(bool),
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -87,19 +104,16 @@ impl Application for App {
                 active_tab: Tab::Timer,
                 always_on_top: false,
                 hide_in_ticks: 0,
-                sidebar_collapsed: false,
+                hover_left: false,
+                hover_right: false,
             },
             Command::none(),
         )
     }
 
-    fn title(&self) -> String {
-        APP_NAME.into()
-    }
+    fn title(&self) -> String { APP_NAME.into() }
 
-    fn theme(&self) -> Theme {
-        self.tod.iced_theme()
-    }
+    fn theme(&self) -> Theme { self.tod.iced_theme() }
 
     fn style(&self) -> iced_theme::Application {
         iced_theme::Application::Custom(Box::new(AppBg(self.tod.palette())))
@@ -107,7 +121,6 @@ impl Application for App {
 
     fn subscription(&self) -> Subscription<Message> {
         use std::time::Duration;
-        // Single 1s tick drives both the pomodoro and the controls countdown
         let needs_tick = self.timer.running || self.hide_in_ticks > 0;
         let tick = if needs_tick {
             time::every(Duration::from_secs(1)).map(|_| Message::Tick)
@@ -115,14 +128,13 @@ impl Application for App {
             Subscription::none()
         };
         let clock = time::every(Duration::from_secs(60)).map(|_| Message::RefreshTime);
-        let mouse_events =
-            iced::event::listen_with(|event, _status| match event {
-                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
-                    Some(Message::MouseMoved(position))
-                }
-                iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::MouseLeft),
-                _ => None,
-            });
+        let mouse_events = iced::event::listen_with(|event, _status| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Message::MouseMoved(position))
+            }
+            iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::MouseLeft),
+            _ => None,
+        });
         Subscription::batch(vec![tick, clock, mouse_events])
     }
 
@@ -173,15 +185,18 @@ impl Application for App {
                 };
                 return window::change_level(window::Id::MAIN, level);
             }
-            // Reset 6-second countdown whenever the mouse is near the top
             Message::MouseMoved(pos) => {
-                if pos.y < 50.0 {
+                if pos.y < 40.0 {
                     self.hide_in_ticks = 6;
                 }
             }
-            // Mouse exits the window entirely: hide immediately
-            Message::MouseLeft => self.hide_in_ticks = 0,
-            Message::SidebarToggle => self.sidebar_collapsed = !self.sidebar_collapsed,
+            Message::MouseLeft => {
+                self.hide_in_ticks = 0;
+                self.hover_left = false;
+                self.hover_right = false;
+            }
+            Message::HoverLeft(v) => self.hover_left = v,
+            Message::HoverRight(v) => self.hover_right = v,
         }
         Command::none()
     }
@@ -196,15 +211,27 @@ impl Application for App {
             Tab::Heatmap => heatmap_view(p, &self.heatmap),
         };
 
-        let body = row(vec![
-            nav_sidebar(p, self.active_tab, self.sidebar_collapsed),
-            column(vec![
-                top_bar(p, show_controls, self.always_on_top),
-                content,
-            ])
-            .height(Length::Fill)
-            .into(),
-        ]);
+        let content_row = row(vec![
+            mouse_area(nav_arrow(p, "‹", self.hover_left))
+                .on_enter(Message::HoverLeft(true))
+                .on_exit(Message::HoverLeft(false))
+                .on_press(Message::TabSelected(self.active_tab.prev()))
+                .into(),
+            content,
+            mouse_area(nav_arrow(p, "›", self.hover_right))
+                .on_enter(Message::HoverRight(true))
+                .on_exit(Message::HoverRight(false))
+                .on_press(Message::TabSelected(self.active_tab.next()))
+                .into(),
+        ])
+        .height(Length::Fill);
+
+        let body = column(vec![
+            top_bar(p, show_controls, self.always_on_top),
+            content_row.into(),
+            page_dots(p, self.active_tab),
+        ])
+        .height(Length::Fill);
 
         container(body)
             .width(Length::Fill)
@@ -227,38 +254,40 @@ impl App {
 
 // ── Top Bar ───────────────────────────────────────────────────────────────
 //
-// Always-present 36px transparent strip at the top of the content column.
-// Time-of-day + clock are always visible right-aligned.
-// ⊤ · · · ✕ controls appear only while show_controls is true.
+// 30px strip at the top. Time badge always visible right-aligned.
+// Pin + drag + close appear only while the mouse is near the top (hide_in_ticks > 0).
 
 fn top_bar(p: Palette, show_controls: bool, always_on_top: bool) -> Element<'static, Message> {
     let now = chrono::Local::now();
     let time_str = format!("{:02}:{:02}", now.hour(), now.minute());
 
-    let time_badge = row(vec![
-        text(p.name)
-            .size(11)
-            .style(iced_theme::Text::Color(p.accent))
-            .into(),
-        Space::with_width(8).into(),
-        text(time_str)
-            .size(11)
-            .style(iced_theme::Text::Color(p.subtext))
-            .into(),
-    ])
-    .align_items(Alignment::Center);
+    // "focus  HH:MM" badge — always visible
+    let make_badge = |time: String| -> Element<'static, Message> {
+        row(vec![
+            text(APP_NAME)
+                .size(10)
+                .style(iced_theme::Text::Color(p.accent))
+                .into(),
+            Space::with_width(6).into(),
+            text(time)
+                .size(10)
+                .style(iced_theme::Text::Color(p.subtext))
+                .into(),
+        ])
+        .align_items(Alignment::Center)
+        .into()
+    };
 
     if !show_controls {
-        // Invisible; whole strip is a drag zone, time badge stays visible
         return mouse_area(
             container(
                 row(vec![
                     Space::with_width(Length::Fill).into(),
-                    time_badge.into(),
-                    Space::with_width(14).into(),
+                    make_badge(time_str),
+                    Space::with_width(10).into(),
                 ])
                 .align_items(Alignment::Center)
-                .height(Length::Fixed(36.0)),
+                .height(Length::Fixed(30.0)),
             )
             .width(Length::Fill),
         )
@@ -266,210 +295,152 @@ fn top_bar(p: Palette, show_controls: bool, always_on_top: bool) -> Element<'sta
         .into();
     }
 
-    // Always-on-top toggle (left)
     let pin = button(
         text("⊤")
-            .size(14)
-            .style(iced_theme::Text::Color(if always_on_top { p.accent } else { p.subtext })),
+            .size(11)
+            .style(iced_theme::Text::Color(
+                if always_on_top { p.accent } else { p.subtext },
+            )),
     )
-    .padding([0, 12])
-    .height(Length::Fixed(36.0))
+    .padding([0, 10])
+    .height(Length::Fixed(30.0))
     .style(iced_theme::Button::Custom(Box::new(PinBtn { p, active: always_on_top })))
     .on_press(Message::ToggleAlwaysOnTop);
 
-    // Centre drag grip — 2 rows of 6 dots
-    let dot_color = Color { a: 0.5, ..p.subtext };
-    let make_dot = move || -> Element<'static, Message> {
-        container(Space::new(Length::Fixed(4.0), Length::Fixed(4.0)))
-            .style(iced_theme::Container::Custom(Box::new(DotCell(dot_color))))
-            .into()
-    };
-    let top_dots: Vec<Element<Message>> = (0..6).map(|_| make_dot()).collect();
-    let bot_dots: Vec<Element<Message>> = (0..6).map(|_| make_dot()).collect();
-
-    let grip = column(vec![
-        row(top_dots).spacing(4).into(),
-        Space::with_height(4).into(),
-        row(bot_dots).spacing(4).into(),
-    ])
-    .align_items(Alignment::Center);
-
-    let drag_handle = mouse_area(
-        container(grip)
-            .center_x()
-            .center_y()
-            .padding([0, 20])
-            .height(Length::Fixed(36.0)),
+    let drag_zone = mouse_area(
+        container(Space::new(Length::Fill, Length::Fixed(30.0))),
     )
     .on_press(Message::TitleBarDrag);
 
-    // Close button (right, after the time badge)
     let close = button(
         text("✕")
-            .size(11)
+            .size(9)
             .style(iced_theme::Text::Color(p.subtext)),
     )
-    .padding([0, 14])
-    .height(Length::Fixed(36.0))
+    .padding([0, 12])
+    .height(Length::Fixed(30.0))
     .style(iced_theme::Button::Custom(Box::new(CloseBtn(p))))
     .on_press(Message::WindowClose);
 
-    // Transparent container — no background, floats over window
     container(
         row(vec![
             pin.into(),
-            Space::with_width(Length::Fill).into(),
-            drag_handle.into(),
-            Space::with_width(Length::Fill).into(),
-            time_badge.into(),
-            Space::with_width(8).into(),
+            drag_zone.into(),
+            make_badge(time_str),
+            Space::with_width(4).into(),
             close.into(),
         ])
         .align_items(Alignment::Center)
-        .height(Length::Fixed(36.0)),
+        .height(Length::Fixed(30.0)),
     )
     .width(Length::Fill)
     .style(iced_theme::Container::Custom(Box::new(Flat)))
     .into()
 }
 
-// ── Sidebar Drawer ────────────────────────────────────────────────────────
+// ── Nav Arrows ────────────────────────────────────────────────────────────
+//
+// Transparent 30px-wide strips on either side of the content. The arrow glyph
+// fades in (alpha 0→0.7) when the cursor enters the zone.
 
-fn nav_sidebar(p: Palette, active: Tab, collapsed: bool) -> Element<'static, Message> {
-    let w = if collapsed { 44.0 } else { 120.0 };
-
-    let arrow = if collapsed { "›" } else { "‹" };
-    let toggle_btn = button(
-        text(arrow)
-            .size(14)
-            .style(iced_theme::Text::Color(p.subtext)),
-    )
-    .padding([4, 8])
-    .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
-    .on_press(Message::SidebarToggle);
-
-    let header: Element<Message> = if collapsed {
-        container(toggle_btn)
-            .padding([20, 6])
-            .center_x()
-            .width(Length::Fill)
-            .into()
-    } else {
-        container(
-            row(vec![
-                text(APP_NAME)
-                    .size(15)
-                    .style(iced_theme::Text::Color(p.accent))
-                    .into(),
-                Space::with_width(Length::Fill).into(),
-                toggle_btn.into(),
-            ])
-            .align_items(Alignment::Center),
-        )
-        .padding([20, 10, 16, 16])
-        .into()
-    };
-
-    let nav: Element<Message> = if collapsed {
-        Space::with_height(0).into()
-    } else {
-        column(vec![
-            nav_tab("timer",    Tab::Timer,   active, p),
-            nav_tab("tasks",    Tab::Tasks,   active, p),
-            nav_tab("activity", Tab::Heatmap, active, p),
-        ])
-        .into()
-    };
-
+fn nav_arrow(p: Palette, symbol: &'static str, visible: bool) -> Element<'static, Message> {
+    let alpha: f32 = if visible { 0.7 } else { 0.0 };
     container(
-        column(vec![
-            header,
-            nav,
-            Space::with_height(Length::Fill).into(),
-        ]),
+        text(symbol)
+            .size(20)
+            .style(iced_theme::Text::Color(Color { a: alpha, ..p.text })),
     )
-    .width(Length::Fixed(w))
+    .width(Length::Fixed(30.0))
     .height(Length::Fill)
-    .style(iced_theme::Container::Custom(Box::new(Sidebar(p))))
+    .center_x()
+    .center_y()
     .into()
 }
 
-fn nav_tab(label: &'static str, tab: Tab, active: Tab, p: Palette) -> Element<'static, Message> {
-    button(text(label).size(13))
-        .padding([10, 16])
+// ── Page Dots ─────────────────────────────────────────────────────────────
+
+fn page_dots(p: Palette, active: Tab) -> Element<'static, Message> {
+    let tabs = [Tab::Timer, Tab::Tasks, Tab::Heatmap];
+    let dots: Vec<Element<Message>> = tabs
+        .iter()
+        .map(|&tab| {
+            let color = if tab == active {
+                p.accent
+            } else {
+                Color { a: 0.3, ..p.subtext }
+            };
+            container(Space::new(Length::Fixed(5.0), Length::Fixed(5.0)))
+                .style(iced_theme::Container::Custom(Box::new(DotCell(color))))
+                .into()
+        })
+        .collect();
+
+    container(row(dots).spacing(5).align_items(Alignment::Center))
+        .center_x()
         .width(Length::Fill)
-        .style(iced_theme::Button::Custom(Box::new(TabBtn { p, active: tab == active })))
-        .on_press(Message::TabSelected(tab))
+        .padding([0, 0, 10, 0])
         .into()
 }
 
-// ── Timer Tab ─────────────────────────────────────────────────────────────
+// ── Timer View ────────────────────────────────────────────────────────────
 
 fn timer_view(p: Palette, timer: &Pomodoro) -> Element<Message> {
     let phase = text(timer.phase.label())
-        .size(13)
+        .size(10)
         .style(iced_theme::Text::Color(p.subtext));
 
     let digits = text(timer.format())
         .font(iced::Font::MONOSPACE)
-        .size(72)
+        .size(52)
         .style(iced_theme::Text::Color(p.text));
 
     let bar = progress_bar(0.0..=1.0, timer.progress())
-        .height(Length::Fixed(4.0))
+        .height(Length::Fixed(3.0))
         .style(iced_theme::ProgressBar::Custom(Box::new(ProgressStyle(p))));
 
     let cycle_pos = (timer.done % 4) as usize;
     let dots: Vec<Element<Message>> = (0..4)
         .map(|i| {
             let color = if i < cycle_pos { p.accent } else { p.surface2 };
-            container(Space::new(Length::Fixed(9.0), Length::Fixed(9.0)))
+            container(Space::new(Length::Fixed(7.0), Length::Fixed(7.0)))
                 .style(iced_theme::Container::Custom(Box::new(DotCell(color))))
                 .into()
         })
         .collect();
 
-    let session_row = row(vec![
-        row(dots).spacing(7).into(),
-        Space::with_width(10).into(),
-        text(format!("session {}/4", cycle_pos + 1))
-            .size(12)
-            .style(iced_theme::Text::Color(p.subtext))
-            .into(),
-    ])
-    .align_items(Alignment::Center);
+    let dot_row = row(dots).spacing(6).align_items(Alignment::Center);
 
     let toggle_label = if timer.running { "⏸  Pause" } else { "▶  Start" };
-    let toggle = button(text(toggle_label).size(14))
-        .padding([10, 28])
+    let toggle = button(text(toggle_label).size(12))
+        .padding([7, 20])
         .style(iced_theme::Button::Custom(Box::new(AccentBtn(p))))
         .on_press(Message::TimerToggle);
 
-    let reset = button(text("↺").size(16))
-        .padding([10, 16])
+    let reset = button(text("↺").size(14))
+        .padding([7, 12])
         .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
         .on_press(Message::TimerReset);
 
-    let skip = button(text("⏭").size(16))
-        .padding([10, 16])
+    let skip = button(text("⏭").size(14))
+        .padding([7, 12])
         .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
         .on_press(Message::TimerSkip);
 
     let controls = row(vec![toggle.into(), reset.into(), skip.into()])
-        .spacing(10)
+        .spacing(8)
         .align_items(Alignment::Center);
 
-    let bar_wrapper = container(bar).width(Length::Fixed(240.0));
+    let bar_wrapper = container(bar).width(Length::Fixed(180.0));
 
     let inner = column(vec![
         phase.into(),
-        Space::with_height(4).into(),
+        Space::with_height(2).into(),
         digits.into(),
-        Space::with_height(16).into(),
+        Space::with_height(10).into(),
         bar_wrapper.into(),
-        Space::with_height(20).into(),
-        session_row.into(),
-        Space::with_height(28).into(),
+        Space::with_height(12).into(),
+        dot_row.into(),
+        Space::with_height(16).into(),
         controls.into(),
     ])
     .align_items(Alignment::Center);
@@ -483,19 +454,19 @@ fn timer_view(p: Palette, timer: &Pomodoro) -> Element<Message> {
         .into()
 }
 
-// ── Tasks Tab ─────────────────────────────────────────────────────────────
+// ── Tasks View ────────────────────────────────────────────────────────────
 
 fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, Message> {
     let pending = tasks.iter().filter(|t| !t.done).count();
 
     let header = row(vec![
-        text("Today")
-            .size(20)
+        text("today")
+            .size(13)
             .style(iced_theme::Text::Color(p.text))
             .into(),
-        Space::with_width(10).into(),
-        text(format!("· {} remaining", pending))
-            .size(14)
+        Space::with_width(6).into(),
+        text(format!("· {}", pending))
+            .size(11)
             .style(iced_theme::Text::Color(p.subtext))
             .into(),
     ])
@@ -506,52 +477,59 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
         .map(|task| {
             let check = button(
                 text(if task.done { "✓" } else { " " })
-                    .size(12)
-                    .style(iced_theme::Text::Color(if task.done { p.bg } else { p.subtext })),
+                    .size(10)
+                    .style(iced_theme::Text::Color(
+                        if task.done { p.bg } else { p.subtext },
+                    )),
             )
-            .padding([4, 8])
-            .style(iced_theme::Button::Custom(Box::new(TaskCheckBtn { p, done: task.done })))
+            .padding([3, 6])
+            .style(iced_theme::Button::Custom(Box::new(TaskCheckBtn {
+                p,
+                done: task.done,
+            })))
             .on_press(Message::TaskToggle(task.id));
 
             let label = text(&task.text)
-                .size(15)
-                .style(iced_theme::Text::Color(if task.done { p.subtext } else { p.text }));
+                .size(12)
+                .style(iced_theme::Text::Color(
+                    if task.done { p.subtext } else { p.text },
+                ));
 
-            let del = button(text("✕").size(11))
-                .padding([4, 7])
+            let del = button(text("✕").size(9))
+                .padding([3, 5])
                 .style(iced_theme::Button::Custom(Box::new(DeleteBtn(p))))
                 .on_press(Message::TaskDelete(task.id));
 
             container(
                 row(vec![
                     check.into(),
-                    container(label).padding([0, 12]).width(Length::Fill).into(),
+                    container(label).padding([0, 8]).width(Length::Fill).into(),
                     del.into(),
                 ])
                 .align_items(Alignment::Center),
             )
-            .padding([6, 4])
+            .padding([4, 2])
             .into()
         })
         .collect();
 
-    let list = scrollable(column(items).spacing(2).padding([4, 0])).height(Length::Fill);
+    let list = scrollable(column(items).spacing(1).padding([2, 0])).height(Length::Fill);
 
     let add_input = text_input("add a task...", input)
         .on_input(Message::TaskInputChanged)
         .on_submit(Message::TaskAdd)
-        .padding([10, 14])
-        .size(14)
+        .padding([7, 10])
+        .size(12)
         .style(iced_theme::TextInput::Custom(Box::new(TaskInput(p))));
 
     let inner = column(vec![
         header.into(),
-        Space::with_height(16).into(),
+        Space::with_height(8).into(),
         list.into(),
-        Space::with_height(12).into(),
+        Space::with_height(6).into(),
         add_input.into(),
     ])
-    .padding([24, 28]);
+    .padding([14, 14]);
 
     container(inner)
         .width(Length::Fill)
@@ -560,7 +538,9 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
         .into()
 }
 
-// ── Activity Tab ──────────────────────────────────────────────────────────
+// ── Heatmap View ──────────────────────────────────────────────────────────
+//
+// Shows 16 weeks × 7 days at 10px cells to fit the mini window width.
 
 fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap) -> Element<'a, Message> {
     let today = chrono::Local::now().date_naive();
@@ -573,9 +553,9 @@ fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap) -> Element<'a, Message> {
     let grid_rows: Vec<Element<Message>> = (0i64..7)
         .map(|day| {
             let mut cells: Vec<Element<Message>> = vec![text(day_labels[day as usize])
-                .size(11)
+                .size(9)
                 .style(iced_theme::Text::Color(p.subtext))
-                .width(Length::Fixed(16.0))
+                .width(Length::Fixed(12.0))
                 .into()];
 
             for week in 0i64..16 {
@@ -585,15 +565,14 @@ fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap) -> Element<'a, Message> {
                 } else {
                     theme::heat_color(heatmap.get(date), p)
                 };
-
                 cells.push(
-                    container(Space::new(Length::Fixed(16.0), Length::Fixed(16.0)))
+                    container(Space::new(Length::Fixed(10.0), Length::Fixed(10.0)))
                         .style(iced_theme::Container::Custom(Box::new(HeatCell(color))))
                         .into(),
                 );
             }
 
-            row(cells).spacing(4).align_items(Alignment::Center).into()
+            row(cells).spacing(3).align_items(Alignment::Center).into()
         })
         .collect();
 
@@ -601,46 +580,24 @@ fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap) -> Element<'a, Message> {
     let total_sessions = total_mins / 25;
 
     let header = row(vec![
-        text("Activity")
-            .size(20)
+        text("activity")
+            .size(13)
             .style(iced_theme::Text::Color(p.text))
             .into(),
         Space::with_width(Length::Fill).into(),
-        text(format!("{} sessions total", total_sessions))
-            .size(12)
+        text(format!("{} sessions", total_sessions))
+            .size(10)
             .style(iced_theme::Text::Color(p.subtext))
             .into(),
     ])
-    .align_items(Alignment::Center);
-
-    let legend = row(vec![
-        text("less")
-            .size(11)
-            .style(iced_theme::Text::Color(p.subtext))
-            .into(),
-        Space::with_width(6).into(),
-        legend_cell(0, p),
-        legend_cell(15, p),
-        legend_cell(40, p),
-        legend_cell(70, p),
-        legend_cell(120, p),
-        Space::with_width(6).into(),
-        text("more")
-            .size(11)
-            .style(iced_theme::Text::Color(p.subtext))
-            .into(),
-    ])
-    .spacing(3)
     .align_items(Alignment::Center);
 
     let inner = column(vec![
         header.into(),
-        Space::with_height(24).into(),
-        column(grid_rows).spacing(4).into(),
-        Space::with_height(16).into(),
-        legend.into(),
+        Space::with_height(12).into(),
+        column(grid_rows).spacing(3).into(),
     ])
-    .padding([24, 28]);
+    .padding([14, 10]);
 
     container(inner)
         .width(Length::Fill)
@@ -649,10 +606,56 @@ fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap) -> Element<'a, Message> {
         .into()
 }
 
-fn legend_cell(mins: u32, p: Palette) -> Element<'static, Message> {
-    container(Space::new(Length::Fixed(14.0), Length::Fixed(14.0)))
-        .style(iced_theme::Container::Custom(Box::new(HeatCell(theme::heat_color(mins, p)))))
-        .into()
+// ── App Icon ──────────────────────────────────────────────────────────────
+//
+// 32×32 clock-face drawn from raw RGBA: dark fill, blue ring, light hands.
+
+fn create_app_icon() -> Option<window::Icon> {
+    const S: u32 = 32;
+    let n = S as usize;
+    let mut rgba = vec![0u8; n * n * 4];
+    let c = 15.5_f32;
+
+    for y in 0..n {
+        for x in 0..n {
+            let dx = x as f32 - c;
+            let dy = y as f32 - c;
+            let r = (dx * dx + dy * dy).sqrt();
+            let i = (y * n + x) * 4;
+
+            if r > 14.5 {
+                // transparent outside circle
+                continue;
+            }
+
+            if r >= 11.0 {
+                // blue ring
+                rgba[i]   = 96;
+                rgba[i+1] = 165;
+                rgba[i+2] = 250;
+                rgba[i+3] = 255;
+            } else {
+                // dark interior
+                rgba[i]   = 15;
+                rgba[i+1] = 17;
+                rgba[i+2] = 23;
+                rgba[i+3] = 255;
+
+                // clock hands: 12-o'clock (up) and 3-o'clock (right)
+                let hand_up    = dx.abs() < 1.2 && dy < 0.0 && dy > -8.5;
+                let hand_right = dy.abs() < 1.2 && dx > 0.0 && dx < 6.5;
+                let center_dot = r < 1.8;
+                if hand_up || hand_right || center_dot {
+                    rgba[i]   = 200;
+                    rgba[i+1] = 225;
+                    rgba[i+2] = 245;
+                    rgba[i+3] = 255;
+                }
+            }
+        }
+    }
+
+    window::icon::from_rgba(rgba, S, S).ok()
 }
 
 // ── Entry Point ───────────────────────────────────────────────────────────
@@ -670,10 +673,11 @@ fn main() -> iced::Result {
             ..iced::Font::DEFAULT
         },
         window: window::Settings {
-            size: iced::Size::new(780.0, 540.0),
-            min_size: Some(iced::Size::new(620.0, 440.0)),
+            size: iced::Size::new(320.0, 260.0),
+            resizable: false,
             decorations: false,
             transparent: true,
+            icon: create_app_icon(),
             ..Default::default()
         },
         ..Default::default()
