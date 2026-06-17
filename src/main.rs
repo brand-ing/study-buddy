@@ -5,8 +5,8 @@ mod sound;
 mod storage;
 mod theme;
 
-use chrono::{Datelike, Timelike};
-use data::{Heatmap, Pomodoro, Task};
+use chrono::{Datelike, NaiveDate, Timelike};
+use data::{Heatmap, Phase, Pomodoro, Task};
 use iced::theme as iced_theme;
 use iced::widget::{
     button, column, container, mouse_area, progress_bar, row, scrollable, text, text_input, Space,
@@ -64,6 +64,7 @@ struct App {
     hide_in_ticks: u8,
     hover_left: bool,
     hover_right: bool,
+    hovered_heat_date: Option<NaiveDate>,
     audio: Option<AudioPlayer>,
 }
 
@@ -78,6 +79,8 @@ enum Message {
     TaskToggle(u64),
     TaskDelete(u64),
     TaskClearDone,
+    TaskMoveUp(u64),
+    TaskMoveDown(u64),
     RefreshTime,
     TabSelected(Tab),
     TitleBarDrag,
@@ -87,6 +90,8 @@ enum Message {
     MouseLeft,
     HoverLeft(bool),
     HoverRight(bool),
+    HeatCellEntered(NaiveDate),
+    HeatCellLeft,
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -112,6 +117,7 @@ impl Application for App {
                 hide_in_ticks: 0,
                 hover_left: false,
                 hover_right: false,
+                hovered_heat_date: None,
                 audio: AudioPlayer::new(),
             },
             Command::none(),
@@ -188,6 +194,16 @@ impl Application for App {
                 self.tasks.retain(|t| !t.done);
                 self.persist();
             }
+            Message::TaskMoveUp(id) => {
+                if let Some(i) = self.tasks.iter().position(|t| t.id == id) {
+                    if i > 0 { self.click(); self.tasks.swap(i, i - 1); self.persist(); }
+                }
+            }
+            Message::TaskMoveDown(id) => {
+                if let Some(i) = self.tasks.iter().position(|t| t.id == id) {
+                    if i + 1 < self.tasks.len() { self.click(); self.tasks.swap(i, i + 1); self.persist(); }
+                }
+            }
             Message::RefreshTime => self.tod = TimeOfDay::now(),
             Message::TabSelected(tab) => self.active_tab = tab,
             Message::TitleBarDrag => return window::drag(window::Id::MAIN),
@@ -214,6 +230,8 @@ impl Application for App {
             }
             Message::HoverLeft(v) => self.hover_left = v,
             Message::HoverRight(v) => self.hover_right = v,
+            Message::HeatCellEntered(date) => self.hovered_heat_date = Some(date),
+            Message::HeatCellLeft => self.hovered_heat_date = None,
         }
         Command::none()
     }
@@ -222,10 +240,16 @@ impl Application for App {
         let p = self.tod.palette();
         let show_controls = self.hide_in_ticks > 0;
 
+        let session_color: Option<Color> = if self.timer.running {
+            Some(if self.timer.phase == Phase::Work { p.accent } else { p.success })
+        } else {
+            None
+        };
+
         let content: Element<Message> = match self.active_tab {
             Tab::Timer => timer_view(p, &self.timer),
             Tab::Tasks => tasks_view(p, &self.tasks, &self.task_input),
-            Tab::Heatmap => heatmap_view(p, &self.heatmap),
+            Tab::Heatmap => heatmap_view(p, &self.heatmap, self.hovered_heat_date),
         };
 
         let content_row = row(vec![
@@ -244,7 +268,7 @@ impl Application for App {
         .height(Length::Fill);
 
         let body = column(vec![
-            top_bar(p, show_controls, self.always_on_top),
+            top_bar(p, show_controls, self.always_on_top, session_color),
             content_row.into(),
             page_dots(p, self.active_tab),
         ])
@@ -281,25 +305,35 @@ impl App {
 // 30px strip at the top. Time badge always visible right-aligned.
 // Pin + drag + close appear only while the mouse is near the top (hide_in_ticks > 0).
 
-fn top_bar(p: Palette, show_controls: bool, always_on_top: bool) -> Element<'static, Message> {
+fn top_bar(p: Palette, show_controls: bool, always_on_top: bool, session_color: Option<Color>) -> Element<'static, Message> {
     let now = chrono::Local::now();
     let time_str = format!("{:02}:{:02}", now.hour(), now.minute());
 
-    // "focus  HH:MM" badge — always visible
-    let make_badge = |time: String| -> Element<'static, Message> {
-        row(vec![
+    // "● focus  HH:MM" badge — always visible; dot appears only when timer is running
+    let make_badge = move |time: String| -> Element<'static, Message> {
+        let mut items: Vec<Element<Message>> = vec![];
+        if let Some(color) = session_color {
+            items.push(
+                container(Space::new(Length::Fixed(6.0), Length::Fixed(6.0)))
+                    .style(iced_theme::Container::Custom(Box::new(DotCell(color))))
+                    .into(),
+            );
+            items.push(Space::with_width(5).into());
+        }
+        items.push(
             text(APP_NAME)
                 .size(10)
                 .style(iced_theme::Text::Color(p.accent))
                 .into(),
-            Space::with_width(6).into(),
+        );
+        items.push(Space::with_width(6).into());
+        items.push(
             text(time)
                 .size(10)
                 .style(iced_theme::Text::Color(p.subtext))
                 .into(),
-        ])
-        .align_items(Alignment::Center)
-        .into()
+        );
+        row(items).align_items(Alignment::Center).into()
     };
 
     if !show_controls {
@@ -506,9 +540,11 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
     ])
     .align_items(Alignment::Center);
 
+    let n = tasks.len();
     let items: Vec<Element<Message>> = tasks
         .iter()
-        .map(|task| {
+        .enumerate()
+        .map(|(i, task)| {
             let check = button(
                 text(if task.done { "✓" } else { " " })
                     .size(10)
@@ -529,6 +565,16 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
                     if task.done { p.subtext } else { p.text },
                 ));
 
+            let mut up_btn = button(text("↑").size(8))
+                .padding([2, 4])
+                .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))));
+            if i > 0 { up_btn = up_btn.on_press(Message::TaskMoveUp(task.id)); }
+
+            let mut down_btn = button(text("↓").size(8))
+                .padding([2, 4])
+                .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))));
+            if i + 1 < n { down_btn = down_btn.on_press(Message::TaskMoveDown(task.id)); }
+
             let del = button(text("✕").size(9))
                 .padding([3, 5])
                 .style(iced_theme::Button::Custom(Box::new(DeleteBtn(p))))
@@ -538,6 +584,8 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
                 row(vec![
                     check.into(),
                     container(label).padding([0, 8]).width(Length::Fill).into(),
+                    up_btn.into(),
+                    down_btn.into(),
                     del.into(),
                 ])
                 .align_items(Alignment::Center),
@@ -576,7 +624,7 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
 //
 // Shows 16 weeks × 7 days at 10px cells to fit the mini window width.
 
-fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap) -> Element<'a, Message> {
+fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap, hovered: Option<NaiveDate>) -> Element<'a, Message> {
     let today = chrono::Local::now().date_naive();
     let today_dow = today.weekday().num_days_from_monday() as i64;
     let week_start = today - chrono::Duration::days(today_dow);
@@ -594,16 +642,24 @@ fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap) -> Element<'a, Message> {
 
             for week in 0i64..16 {
                 let date = grid_start + chrono::Duration::days(week * 7 + day);
-                let color = if date > today {
+                let is_future = date > today;
+                let color = if is_future {
                     iced::Color { a: 0.07, ..p.surface2 }
                 } else {
                     theme::heat_color(heatmap.get(date), p)
                 };
-                cells.push(
-                    container(Space::new(Length::Fixed(10.0), Length::Fixed(10.0)))
-                        .style(iced_theme::Container::Custom(Box::new(HeatCell(color))))
-                        .into(),
-                );
+                let cell = container(Space::new(Length::Fixed(10.0), Length::Fixed(10.0)))
+                    .style(iced_theme::Container::Custom(Box::new(HeatCell(color))));
+                if is_future {
+                    cells.push(cell.into());
+                } else {
+                    cells.push(
+                        mouse_area(cell)
+                            .on_enter(Message::HeatCellEntered(date))
+                            .on_exit(Message::HeatCellLeft)
+                            .into(),
+                    );
+                }
             }
 
             row(cells).spacing(3).align_items(Alignment::Center).into()
@@ -626,10 +682,25 @@ fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap) -> Element<'a, Message> {
     ])
     .align_items(Alignment::Center);
 
+    let hover_label: String = match hovered {
+        Some(date) => {
+            let mins = heatmap.get(date);
+            let sessions = mins / 25;
+            let s = if sessions == 1 { "" } else { "s" };
+            format!("{} — {} session{}", date.format("%b %-d"), sessions, s)
+        }
+        None => String::new(),
+    };
+
     let inner = column(vec![
         header.into(),
         Space::with_height(12).into(),
         column(grid_rows).spacing(3).into(),
+        Space::with_height(6).into(),
+        text(hover_label)
+            .size(9)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into(),
     ])
     .padding([14, 10]);
 
