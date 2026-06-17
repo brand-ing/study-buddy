@@ -462,6 +462,33 @@ impl container::StyleSheet for DragRow {
     }
 }
 
+pub struct SettingsBtn { pub p: Palette, pub active: bool }
+impl button::StyleSheet for SettingsBtn {
+    type Style = iced::Theme;
+    fn active(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: if self.active {
+                Some(Background::Color(Color { a: 0.13, ..self.p.accent }))
+            } else {
+                None
+            },
+            text_color: if self.active { self.p.accent } else { self.p.subtext },
+            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn hovered(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: Some(Background::Color(Color { a: 0.08, ..self.p.accent })),
+            text_color: self.p.accent,
+            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn pressed(&self, s: &iced::Theme) -> button::Appearance { self.hovered(s) }
+    fn disabled(&self, s: &iced::Theme) -> button::Appearance { self.active(s) }
+}
+
 pub struct PinBtn { pub p: Palette, pub active: bool }
 impl button::StyleSheet for PinBtn {
     type Style = iced::Theme;

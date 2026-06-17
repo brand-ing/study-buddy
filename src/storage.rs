@@ -1,13 +1,19 @@
-use crate::data::{Heatmap, Task};
+use crate::data::{Heatmap, SessionConfig, Task};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct SaveData {
+    #[serde(default)]
     pub tasks: Vec<Task>,
+    #[serde(default)]
     pub heatmap: Heatmap,
+    #[serde(default)]
     pub next_id: u64,
+    #[serde(default)]
     pub pomodoros_done: u32,
+    #[serde(default)]
+    pub session_config: SessionConfig,
 }
 
 fn data_path() -> PathBuf {

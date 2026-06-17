@@ -6,7 +6,7 @@ mod storage;
 mod theme;
 
 use chrono::{Datelike, NaiveDate, Timelike};
-use data::{Heatmap, Phase, Pomodoro, Task};
+use data::{Heatmap, Phase, Pomodoro, SessionConfig, Task, TimerPreset};
 use iced::theme as iced_theme;
 use iced::widget::{
     button, column, container, mouse_area, progress_bar, row, scrollable, text, text_input, Space,
@@ -19,7 +19,8 @@ use sound::AudioPlayer;
 use storage::SaveData;
 use theme::{
     AccentBtn, AppBg, CloseBtn, DeleteBtn, DotCell, DragRow, Flat, GhostBtn, HeatCell,
-    OuterBorder, Palette, PinBtn, ProgressStyle, TaskCheckBtn, TaskInput, TimeOfDay,
+    OuterBorder, Palette, PinBtn, ProgressStyle, SettingsBtn, TaskCheckBtn,
+    TaskInput, TimeOfDay,
 };
 
 const APP_NAME: &str = "focus";
@@ -69,6 +70,15 @@ struct App {
     drag_task_id: Option<u64>,
     drag_target_idx: usize,
     audio: Option<AudioPlayer>,
+    // task editing
+    editing_task_id: Option<u64>,
+    edit_text: String,
+    last_task_press: Option<(u64, std::time::Instant)>,
+    // settings
+    show_settings: bool,
+    custom_work_input: String,
+    custom_short_input: String,
+    custom_long_input: String,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +94,9 @@ enum Message {
     TaskClearDone,
     TaskDragStart { id: u64, idx: usize },
     TaskHovered(Option<u64>),
+    TaskPressed(u64),
+    TaskEditChanged(String),
+    TaskEditSubmit,
     MouseReleased,
     RefreshTime,
     TabSelected(Tab),
@@ -96,6 +109,12 @@ enum Message {
     HoverRight(bool),
     HeatCellEntered(NaiveDate),
     HeatCellLeft,
+    ToggleSettings,
+    SetPreset(TimerPreset),
+    CustomWorkChanged(String),
+    CustomShortChanged(String),
+    CustomLongChanged(String),
+    ApplyCustomPreset,
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -108,13 +127,14 @@ impl Application for App {
 
     fn new(_: ()) -> (Self, Command<Message>) {
         let s = storage::load();
+        let cfg = s.session_config;
         (
             Self {
                 tod: TimeOfDay::now(),
                 tasks: s.tasks,
                 task_input: String::new(),
                 next_id: s.next_id,
-                timer: Pomodoro::new(s.pomodoros_done),
+                timer: Pomodoro::new(s.pomodoros_done, cfg),
                 heatmap: s.heatmap,
                 active_tab: Tab::Timer,
                 always_on_top: false,
@@ -126,6 +146,13 @@ impl Application for App {
                 drag_task_id: None,
                 drag_target_idx: 0,
                 audio: AudioPlayer::new(),
+                editing_task_id: None,
+                edit_text: String::new(),
+                last_task_press: None,
+                show_settings: false,
+                custom_work_input: cfg.work_mins.to_string(),
+                custom_short_input: cfg.short_mins.to_string(),
+                custom_long_input: cfg.long_mins.to_string(),
             },
             Command::none(),
         )
@@ -166,16 +193,24 @@ impl Application for App {
             Message::Tick => {
                 if self.timer.running && self.timer.tick() {
                     self.chime();
-                    self.heatmap.add(25);
+                    self.heatmap.add(self.timer.config.work_mins);
                     self.persist();
                 }
                 if self.hide_in_ticks > 0 {
                     self.hide_in_ticks -= 1;
                 }
             }
-            Message::TimerToggle => { self.click(); self.timer.running = !self.timer.running; }
+            Message::TimerToggle => {
+                self.click();
+                if self.timer.phase == Phase::OpenBreak {
+                    self.timer.advance();
+                    self.timer.running = true;
+                } else {
+                    self.timer.running = !self.timer.running;
+                }
+            }
             Message::TimerReset => { self.click(); self.timer.reset(); }
-            Message::TimerSkip => { self.click(); self.timer.skip(); }
+            Message::TimerSkip  => { self.click(); self.timer.skip(); }
             Message::TaskInputChanged(s) => self.task_input = s,
             Message::TaskAdd => {
                 let t = self.task_input.trim().to_string();
@@ -189,6 +224,10 @@ impl Application for App {
             }
             Message::TaskToggle(id) => {
                 self.click();
+                if self.editing_task_id == Some(id) {
+                    self.editing_task_id = None;
+                    self.edit_text.clear();
+                }
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                     t.done = !t.done;
                 }
@@ -196,6 +235,10 @@ impl Application for App {
             }
             Message::TaskDelete(id) => {
                 self.click();
+                if self.editing_task_id == Some(id) {
+                    self.editing_task_id = None;
+                    self.edit_text.clear();
+                }
                 self.tasks.retain(|t| t.id != id);
                 self.persist();
             }
@@ -209,6 +252,48 @@ impl Application for App {
                 self.drag_target_idx = idx;
             }
             Message::TaskHovered(id) => self.hovered_task_id = id,
+            Message::TaskPressed(id) => {
+                // Commit any in-progress edit before handling click
+                if let Some(edit_id) = self.editing_task_id.take() {
+                    let text = self.edit_text.trim().to_string();
+                    if !text.is_empty() {
+                        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == edit_id) {
+                            t.text = text;
+                            self.persist();
+                        }
+                    }
+                    self.edit_text.clear();
+                    if edit_id == id { return Command::none(); }
+                }
+                let now = std::time::Instant::now();
+                let is_double = self.last_task_press
+                    .map(|(prev_id, prev_time)| {
+                        prev_id == id && now.duration_since(prev_time).as_millis() < 400
+                    })
+                    .unwrap_or(false);
+                if is_double {
+                    if let Some(t) = self.tasks.iter().find(|t| t.id == id) {
+                        self.editing_task_id = Some(id);
+                        self.edit_text = t.text.clone();
+                    }
+                    self.last_task_press = None;
+                } else {
+                    self.last_task_press = Some((id, now));
+                }
+            }
+            Message::TaskEditChanged(s) => self.edit_text = s,
+            Message::TaskEditSubmit => {
+                if let Some(id) = self.editing_task_id.take() {
+                    let text = self.edit_text.trim().to_string();
+                    if !text.is_empty() {
+                        if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
+                            t.text = text;
+                        }
+                        self.persist();
+                    }
+                }
+                self.edit_text.clear();
+            }
             Message::MouseReleased => {
                 if let Some(drag_id) = self.drag_task_id.take() {
                     if let Some(src) = self.tasks.iter().position(|t| t.id == drag_id) {
@@ -234,11 +319,8 @@ impl Application for App {
                 return window::change_level(window::Id::MAIN, level);
             }
             Message::MouseMoved(pos) => {
-                if pos.y < 40.0 {
-                    self.hide_in_ticks = 6;
-                }
+                if pos.y < 40.0 { self.hide_in_ticks = 6; }
                 if self.drag_task_id.is_some() && !self.tasks.is_empty() {
-                    // Approximate: task list starts ~75px from top, each row ~31px
                     let raw = ((pos.y - 75.0) / 31.0).floor() as isize;
                     self.drag_target_idx =
                         raw.clamp(0, self.tasks.len() as isize - 1) as usize;
@@ -255,6 +337,34 @@ impl Application for App {
             Message::HoverRight(v) => self.hover_right = v,
             Message::HeatCellEntered(date) => self.hovered_heat_date = Some(date),
             Message::HeatCellLeft => self.hovered_heat_date = None,
+            Message::ToggleSettings => {
+                self.click();
+                self.show_settings = !self.show_settings;
+            }
+            Message::SetPreset(preset) => {
+                self.click();
+                let cfg = SessionConfig::from_preset(preset);
+                self.custom_work_input  = cfg.work_mins.to_string();
+                self.custom_short_input = cfg.short_mins.to_string();
+                self.custom_long_input  = cfg.long_mins.to_string();
+                self.timer.set_config(cfg);
+                self.persist();
+            }
+            Message::CustomWorkChanged(s)  => self.custom_work_input  = s,
+            Message::CustomShortChanged(s) => self.custom_short_input = s,
+            Message::CustomLongChanged(s)  => self.custom_long_input  = s,
+            Message::ApplyCustomPreset => {
+                self.click();
+                let work  = self.custom_work_input.trim().parse::<u32>().unwrap_or(25).max(1).min(180);
+                let short = self.custom_short_input.trim().parse::<u32>().unwrap_or(5).max(1).min(60);
+                let long  = self.custom_long_input.trim().parse::<u32>().unwrap_or(15).max(1).min(60);
+                let cfg = SessionConfig { preset: TimerPreset::Custom, work_mins: work, short_mins: short, long_mins: long };
+                self.custom_work_input  = work.to_string();
+                self.custom_short_input = short.to_string();
+                self.custom_long_input  = long.to_string();
+                self.timer.set_config(cfg);
+                self.persist();
+            }
         }
         Command::none()
     }
@@ -269,31 +379,51 @@ impl Application for App {
             None
         };
 
-        let content: Element<Message> = match self.active_tab {
-            Tab::Timer => timer_view(p, &self.timer),
-            Tab::Tasks => tasks_view(p, &self.tasks, &self.task_input, self.hovered_task_id, self.drag_task_id, self.drag_target_idx),
-            Tab::Heatmap => heatmap_view(p, &self.heatmap, self.hovered_heat_date),
+        let content: Element<Message> = if self.show_settings {
+            settings_view(
+                p,
+                &self.timer.config,
+                &self.custom_work_input,
+                &self.custom_short_input,
+                &self.custom_long_input,
+            )
+        } else {
+            let tab_content: Element<Message> = match self.active_tab {
+                Tab::Timer   => timer_view(p, &self.timer),
+                Tab::Tasks   => tasks_view(
+                    p,
+                    &self.tasks,
+                    &self.task_input,
+                    self.hovered_task_id,
+                    self.drag_task_id,
+                    self.drag_target_idx,
+                    self.editing_task_id,
+                    &self.edit_text,
+                ),
+                Tab::Heatmap => heatmap_view(p, &self.heatmap, self.hovered_heat_date),
+            };
+
+            row(vec![
+                mouse_area(nav_arrow(p, "‹", self.hover_left))
+                    .on_enter(Message::HoverLeft(true))
+                    .on_exit(Message::HoverLeft(false))
+                    .on_press(Message::TabSelected(self.active_tab.prev()))
+                    .into(),
+                tab_content,
+                mouse_area(nav_arrow(p, "›", self.hover_right))
+                    .on_enter(Message::HoverRight(true))
+                    .on_exit(Message::HoverRight(false))
+                    .on_press(Message::TabSelected(self.active_tab.next()))
+                    .into(),
+            ])
+            .height(Length::Fill)
+            .into()
         };
 
-        let content_row = row(vec![
-            mouse_area(nav_arrow(p, "‹", self.hover_left))
-                .on_enter(Message::HoverLeft(true))
-                .on_exit(Message::HoverLeft(false))
-                .on_press(Message::TabSelected(self.active_tab.prev()))
-                .into(),
-            content,
-            mouse_area(nav_arrow(p, "›", self.hover_right))
-                .on_enter(Message::HoverRight(true))
-                .on_exit(Message::HoverRight(false))
-                .on_press(Message::TabSelected(self.active_tab.next()))
-                .into(),
-        ])
-        .height(Length::Fill);
-
         let body = column(vec![
-            top_bar(p, show_controls, self.always_on_top, session_color),
-            content_row.into(),
-            page_dots(p, self.active_tab),
+            top_bar(p, show_controls, self.always_on_top, session_color, self.show_settings),
+            content,
+            page_dots(p, self.active_tab, self.show_settings),
         ])
         .height(Length::Fill);
 
@@ -319,20 +449,23 @@ impl App {
             heatmap: self.heatmap.clone(),
             next_id: self.next_id,
             pomodoros_done: self.timer.done,
+            session_config: self.timer.config,
         });
     }
 }
 
 // ── Top Bar ───────────────────────────────────────────────────────────────
-//
-// 30px strip at the top. Time badge always visible right-aligned.
-// Pin + drag + close appear only while the mouse is near the top (hide_in_ticks > 0).
 
-fn top_bar(p: Palette, show_controls: bool, always_on_top: bool, session_color: Option<Color>) -> Element<'static, Message> {
+fn top_bar(
+    p: Palette,
+    show_controls: bool,
+    always_on_top: bool,
+    session_color: Option<Color>,
+    show_settings: bool,
+) -> Element<'static, Message> {
     let now = chrono::Local::now();
     let time_str = format!("{:02}:{:02}", now.hour(), now.minute());
 
-    // "● focus  HH:MM" badge — always visible; dot appears only when timer is running
     let make_badge = move |time: String| -> Element<'static, Message> {
         let mut items: Vec<Element<Message>> = vec![];
         if let Some(color) = session_color {
@@ -359,13 +492,24 @@ fn top_bar(p: Palette, show_controls: bool, always_on_top: bool, session_color: 
         row(items).align_items(Alignment::Center).into()
     };
 
+    let gear = button(
+        text("⚙").size(11).style(iced_theme::Text::Color(
+            if show_settings { p.accent } else { p.subtext },
+        )),
+    )
+    .padding([0, 8])
+    .height(Length::Fixed(30.0))
+    .style(iced_theme::Button::Custom(Box::new(SettingsBtn { p, active: show_settings })))
+    .on_press(Message::ToggleSettings);
+
     if !show_controls {
         return mouse_area(
             container(
                 row(vec![
                     Space::with_width(Length::Fill).into(),
                     make_badge(time_str),
-                    Space::with_width(10).into(),
+                    gear.into(),
+                    Space::with_width(4).into(),
                 ])
                 .align_items(Alignment::Center)
                 .height(Length::Fixed(30.0)),
@@ -394,9 +538,7 @@ fn top_bar(p: Palette, show_controls: bool, always_on_top: bool, session_color: 
     .on_press(Message::TitleBarDrag);
 
     let close = button(
-        text("✕")
-            .size(9)
-            .style(iced_theme::Text::Color(p.subtext)),
+        text("✕").size(9).style(iced_theme::Text::Color(p.subtext)),
     )
     .padding([0, 12])
     .height(Length::Fixed(30.0))
@@ -408,7 +550,7 @@ fn top_bar(p: Palette, show_controls: bool, always_on_top: bool, session_color: 
             pin.into(),
             drag_zone.into(),
             make_badge(time_str),
-            Space::with_width(4).into(),
+            gear.into(),
             close.into(),
         ])
         .align_items(Alignment::Center)
@@ -420,9 +562,6 @@ fn top_bar(p: Palette, show_controls: bool, always_on_top: bool, session_color: 
 }
 
 // ── Nav Arrows ────────────────────────────────────────────────────────────
-//
-// Transparent 30px-wide strips on either side of the content. The arrow glyph
-// fades in (alpha 0→0.7) when the cursor enters the zone.
 
 fn nav_arrow(p: Palette, symbol: &'static str, visible: bool) -> Element<'static, Message> {
     let alpha: f32 = if visible { 0.7 } else { 0.0 };
@@ -440,7 +579,14 @@ fn nav_arrow(p: Palette, symbol: &'static str, visible: bool) -> Element<'static
 
 // ── Page Dots ─────────────────────────────────────────────────────────────
 
-fn page_dots(p: Palette, active: Tab) -> Element<'static, Message> {
+fn page_dots(p: Palette, active: Tab, show_settings: bool) -> Element<'static, Message> {
+    if show_settings {
+        return container(Space::new(Length::Fill, Length::Fixed(20.0)))
+            .width(Length::Fill)
+            .padding([0, 0, 10, 0])
+            .into();
+    }
+
     let tabs = [Tab::Timer, Tab::Tasks, Tab::Heatmap];
     let dots: Vec<Element<Message>> = tabs
         .iter()
@@ -491,7 +637,14 @@ fn timer_view(p: Palette, timer: &Pomodoro) -> Element<Message> {
 
     let dot_row = row(dots).spacing(6).align_items(Alignment::Center);
 
-    let toggle_label = if timer.running { "⏸  Pause" } else { "▶  Start" };
+    let toggle_label = if timer.phase == Phase::OpenBreak {
+        "▶  Next Session"
+    } else if timer.running {
+        "⏸  Pause"
+    } else {
+        "▶  Start"
+    };
+
     let toggle = button(text(toggle_label).size(12))
         .padding([7, 20])
         .style(iced_theme::Button::Custom(Box::new(AccentBtn(p))))
@@ -544,6 +697,8 @@ fn tasks_view<'a>(
     hovered_task_id: Option<u64>,
     drag_task_id: Option<u64>,
     drag_target_idx: usize,
+    editing_task_id: Option<u64>,
+    edit_text: &'a str,
 ) -> Element<'a, Message> {
     let pending = tasks.iter().filter(|t| !t.done).count();
     let done_count = tasks.len() - pending;
@@ -572,7 +727,6 @@ fn tasks_view<'a>(
     ])
     .align_items(Alignment::Center);
 
-    // Real-time drag preview: show the list in drag-target order while dragging
     let display: Vec<&Task> = if let Some(drag_id) = drag_task_id {
         if let Some(src) = tasks.iter().position(|t| t.id == drag_id) {
             let mut order: Vec<&Task> = tasks.iter().collect();
@@ -592,9 +746,9 @@ fn tasks_view<'a>(
         .enumerate()
         .map(|(i, &task)| {
             let is_dragging = drag_task_id == Some(task.id);
-            let is_hovered = hovered_task_id == Some(task.id);
+            let is_hovered  = hovered_task_id == Some(task.id);
+            let is_editing  = editing_task_id == Some(task.id);
 
-            // Grip handle: invisible by default, fades in on hover, solid while dragging
             let grip_alpha: f32 =
                 if is_dragging { 0.7 } else if is_hovered { 0.45 } else { 0.0 };
             let grip = mouse_area(
@@ -617,15 +771,27 @@ fn tasks_view<'a>(
                     )),
             )
             .padding([3, 6])
-            .style(iced_theme::Button::Custom(Box::new(TaskCheckBtn {
-                p,
-                done: task.done,
-            })))
+            .style(iced_theme::Button::Custom(Box::new(TaskCheckBtn { p, done: task.done })))
             .on_press(Message::TaskToggle(task.id));
 
-            let label = text(&task.text).size(12).style(iced_theme::Text::Color(
-                if task.done { p.subtext } else { p.text },
-            ));
+            let label_area: Element<Message> = if is_editing {
+                text_input("", edit_text)
+                    .on_input(Message::TaskEditChanged)
+                    .on_submit(Message::TaskEditSubmit)
+                    .padding([3, 6])
+                    .size(12)
+                    .style(iced_theme::TextInput::Custom(Box::new(TaskInput(p))))
+                    .into()
+            } else {
+                let label = text(&task.text).size(12).style(iced_theme::Text::Color(
+                    if task.done { p.subtext } else { p.text },
+                ));
+                mouse_area(
+                    container(label).padding([0, 8]).width(Length::Fill),
+                )
+                .on_press(Message::TaskPressed(task.id))
+                .into()
+            };
 
             let del = button(text("✕").size(9))
                 .padding([3, 5])
@@ -643,8 +809,9 @@ fn tasks_view<'a>(
                     row(vec![
                         grip.into(),
                         check.into(),
-                        container(label).padding([0, 8]).width(Length::Fill).into(),
+                        label_area,
                         del.into(),
+                        Space::with_width(8).into(),
                     ])
                     .align_items(Alignment::Center),
                 )
@@ -682,9 +849,126 @@ fn tasks_view<'a>(
         .into()
 }
 
+// ── Settings View ─────────────────────────────────────────────────────────
+
+fn settings_view<'a>(
+    p: Palette,
+    config: &SessionConfig,
+    work_input: &'a str,
+    short_input: &'a str,
+    long_input: &'a str,
+) -> Element<'a, Message> {
+    let preset_btn = |preset: TimerPreset, label: &'static str| -> Element<'a, Message> {
+        let active = config.preset == preset;
+        button(text(label).size(11))
+            .width(Length::Fill)
+            .padding([7, 0])
+            .style(iced_theme::Button::Custom(if active {
+                Box::new(AccentBtn(p)) as Box<dyn iced::widget::button::StyleSheet<Style = iced::Theme>>
+            } else {
+                Box::new(GhostBtn(p))
+            }))
+            .on_press(Message::SetPreset(preset))
+            .into()
+    };
+
+    let preset_row1 = row(vec![
+        preset_btn(TimerPreset::Classic,  "Classic"),
+        Space::with_width(8).into(),
+        preset_btn(TimerPreset::DeepWork, "Deep Work"),
+    ])
+    .align_items(Alignment::Center);
+
+    let preset_row2 = row(vec![
+        preset_btn(TimerPreset::Balanced, "Balanced"),
+        Space::with_width(8).into(),
+        preset_btn(TimerPreset::Custom,   "Custom"),
+    ])
+    .align_items(Alignment::Center);
+
+    let desc = text(config.preset_desc())
+        .size(9)
+        .style(iced_theme::Text::Color(p.subtext));
+
+    let mut inner_items: Vec<Element<Message>> = vec![
+        row(vec![
+            text("settings")
+                .size(13)
+                .style(iced_theme::Text::Color(p.text))
+                .into(),
+            Space::with_width(Length::Fill).into(),
+            button(text("done").size(10))
+                .padding([2, 8])
+                .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
+                .on_press(Message::ToggleSettings)
+                .into(),
+        ])
+        .align_items(Alignment::Center)
+        .into(),
+        Space::with_height(10).into(),
+        text("Session Length")
+            .size(10)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into(),
+        Space::with_height(6).into(),
+        preset_row1.into(),
+        Space::with_height(6).into(),
+        preset_row2.into(),
+        Space::with_height(8).into(),
+        desc.into(),
+    ];
+
+    if config.preset == TimerPreset::Custom {
+        let input_row = |label: &'static str, val: &'a str, msg: fn(String) -> Message| -> Element<'a, Message> {
+            row(vec![
+                text(label)
+                    .size(11)
+                    .style(iced_theme::Text::Color(p.subtext))
+                    .width(Length::Fixed(72.0))
+                    .into(),
+                text_input("", val)
+                    .on_input(msg)
+                    .width(Length::Fixed(42.0))
+                    .padding([4, 6])
+                    .size(11)
+                    .style(iced_theme::TextInput::Custom(Box::new(TaskInput(p))))
+                    .into(),
+                Space::with_width(6).into(),
+                text("min")
+                    .size(10)
+                    .style(iced_theme::Text::Color(p.subtext))
+                    .into(),
+            ])
+            .align_items(Alignment::Center)
+            .into()
+        };
+
+        inner_items.push(Space::with_height(12).into());
+        inner_items.push(input_row("Work", work_input, Message::CustomWorkChanged));
+        inner_items.push(Space::with_height(5).into());
+        inner_items.push(input_row("Short break", short_input, Message::CustomShortChanged));
+        inner_items.push(Space::with_height(5).into());
+        inner_items.push(input_row("Long break", long_input, Message::CustomLongChanged));
+        inner_items.push(Space::with_height(10).into());
+        inner_items.push(
+            button(text("Apply").size(11))
+                .padding([6, 16])
+                .style(iced_theme::Button::Custom(Box::new(AccentBtn(p))))
+                .on_press(Message::ApplyCustomPreset)
+                .into(),
+        );
+    }
+
+    container(
+        column(inner_items).padding([14, 20]),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(iced_theme::Container::Custom(Box::new(Flat)))
+    .into()
+}
+
 // ── Heatmap View ──────────────────────────────────────────────────────────
-//
-// Shows 16 weeks × 7 days at 10px cells to fit the mini window width.
 
 fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap, hovered: Option<NaiveDate>) -> Element<'a, Message> {
     let today = chrono::Local::now().date_naive();
@@ -774,8 +1058,6 @@ fn heatmap_view<'a>(p: Palette, heatmap: &'a Heatmap, hovered: Option<NaiveDate>
 }
 
 // ── App Icon ──────────────────────────────────────────────────────────────
-//
-// 32×32 clock-face drawn from raw RGBA: dark fill, blue ring, light hands.
 
 fn create_app_icon() -> Option<window::Icon> {
     const S: u32 = 32;
@@ -790,25 +1072,19 @@ fn create_app_icon() -> Option<window::Icon> {
             let r = (dx * dx + dy * dy).sqrt();
             let i = (y * n + x) * 4;
 
-            if r > 14.5 {
-                // transparent outside circle
-                continue;
-            }
+            if r > 14.5 { continue; }
 
             if r >= 11.0 {
-                // blue ring
                 rgba[i]   = 96;
                 rgba[i+1] = 165;
                 rgba[i+2] = 250;
                 rgba[i+3] = 255;
             } else {
-                // dark interior
                 rgba[i]   = 15;
                 rgba[i+1] = 17;
                 rgba[i+2] = 23;
                 rgba[i+3] = 255;
 
-                // clock hands: 12-o'clock (up) and 3-o'clock (right)
                 let hand_up    = dx.abs() < 1.2 && dy < 0.0 && dy > -8.5;
                 let hand_right = dy.abs() < 1.2 && dx > 0.0 && dx < 6.5;
                 let center_dot = r < 1.8;
