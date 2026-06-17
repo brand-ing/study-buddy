@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod data;
+mod sound;
 mod storage;
 mod theme;
 
@@ -14,6 +15,7 @@ use iced::{
     Alignment, Application, Color, Command, Element, Length, Settings, Subscription, Theme,
 };
 use iced::{time, window};
+use sound::AudioPlayer;
 use storage::SaveData;
 use theme::{
     AccentBtn, AppBg, CloseBtn, DeleteBtn, DotCell, Flat, GhostBtn, HeatCell, OuterBorder,
@@ -62,6 +64,7 @@ struct App {
     hide_in_ticks: u8,
     hover_left: bool,
     hover_right: bool,
+    audio: Option<AudioPlayer>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +77,7 @@ enum Message {
     TaskAdd,
     TaskToggle(u64),
     TaskDelete(u64),
+    TaskClearDone,
     RefreshTime,
     TabSelected(Tab),
     TitleBarDrag,
@@ -108,6 +112,7 @@ impl Application for App {
                 hide_in_ticks: 0,
                 hover_left: false,
                 hover_right: false,
+                audio: AudioPlayer::new(),
             },
             Command::none(),
         )
@@ -144,6 +149,7 @@ impl Application for App {
         match msg {
             Message::Tick => {
                 if self.timer.running && self.timer.tick() {
+                    self.chime();
                     self.heatmap.add(25);
                     self.persist();
                 }
@@ -151,13 +157,14 @@ impl Application for App {
                     self.hide_in_ticks -= 1;
                 }
             }
-            Message::TimerToggle => self.timer.running = !self.timer.running,
-            Message::TimerReset => self.timer.reset(),
-            Message::TimerSkip => self.timer.skip(),
+            Message::TimerToggle => { self.click(); self.timer.running = !self.timer.running; }
+            Message::TimerReset => { self.click(); self.timer.reset(); }
+            Message::TimerSkip => { self.click(); self.timer.skip(); }
             Message::TaskInputChanged(s) => self.task_input = s,
             Message::TaskAdd => {
                 let t = self.task_input.trim().to_string();
                 if !t.is_empty() {
+                    self.click();
                     self.tasks.push(Task::new(self.next_id, t));
                     self.next_id += 1;
                     self.task_input.clear();
@@ -165,13 +172,20 @@ impl Application for App {
                 }
             }
             Message::TaskToggle(id) => {
+                self.click();
                 if let Some(t) = self.tasks.iter_mut().find(|t| t.id == id) {
                     t.done = !t.done;
                 }
                 self.persist();
             }
             Message::TaskDelete(id) => {
+                self.click();
                 self.tasks.retain(|t| t.id != id);
+                self.persist();
+            }
+            Message::TaskClearDone => {
+                self.click();
+                self.tasks.retain(|t| !t.done);
                 self.persist();
             }
             Message::RefreshTime => self.tod = TimeOfDay::now(),
@@ -179,6 +193,7 @@ impl Application for App {
             Message::TitleBarDrag => return window::drag(window::Id::MAIN),
             Message::WindowClose => return window::close(window::Id::MAIN),
             Message::ToggleAlwaysOnTop => {
+                self.click();
                 self.always_on_top = !self.always_on_top;
                 let level = if self.always_on_top {
                     window::Level::AlwaysOnTop
@@ -244,6 +259,13 @@ impl Application for App {
 }
 
 impl App {
+    fn click(&self) {
+        if let Some(ref a) = self.audio { a.play_click(); }
+    }
+    fn chime(&self) {
+        if let Some(ref a) = self.audio { a.play_chime(); }
+    }
+
     fn persist(&self) {
         storage::save(&SaveData {
             tasks: self.tasks.clone(),
@@ -460,6 +482,14 @@ fn timer_view(p: Palette, timer: &Pomodoro) -> Element<Message> {
 
 fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, Message> {
     let pending = tasks.iter().filter(|t| !t.done).count();
+    let done_count = tasks.len() - pending;
+
+    let mut clear_btn = button(text("clear done").size(10).style(iced_theme::Text::Color(p.subtext)))
+        .padding([2, 6])
+        .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))));
+    if done_count > 0 {
+        clear_btn = clear_btn.on_press(Message::TaskClearDone);
+    }
 
     let header = row(vec![
         text("today")
@@ -471,8 +501,10 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
             .size(11)
             .style(iced_theme::Text::Color(p.subtext))
             .into(),
+        Space::with_width(Length::Fill).into(),
+        clear_btn.into(),
     ])
-    .align_items(Alignment::End);
+    .align_items(Alignment::Center);
 
     let items: Vec<Element<Message>> = tasks
         .iter()
