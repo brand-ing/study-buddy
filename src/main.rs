@@ -18,8 +18,8 @@ use iced::{time, window};
 use sound::AudioPlayer;
 use storage::SaveData;
 use theme::{
-    AccentBtn, AppBg, CloseBtn, DeleteBtn, DotCell, Flat, GhostBtn, HeatCell, OuterBorder,
-    Palette, PinBtn, ProgressStyle, TaskCheckBtn, TaskInput, TimeOfDay,
+    AccentBtn, AppBg, CloseBtn, DeleteBtn, DotCell, DragRow, Flat, GhostBtn, HeatCell,
+    OuterBorder, Palette, PinBtn, ProgressStyle, TaskCheckBtn, TaskInput, TimeOfDay,
 };
 
 const APP_NAME: &str = "focus";
@@ -65,6 +65,9 @@ struct App {
     hover_left: bool,
     hover_right: bool,
     hovered_heat_date: Option<NaiveDate>,
+    hovered_task_id: Option<u64>,
+    drag_task_id: Option<u64>,
+    drag_target_idx: usize,
     audio: Option<AudioPlayer>,
 }
 
@@ -79,8 +82,9 @@ enum Message {
     TaskToggle(u64),
     TaskDelete(u64),
     TaskClearDone,
-    TaskMoveUp(u64),
-    TaskMoveDown(u64),
+    TaskDragStart { id: u64, idx: usize },
+    TaskHovered(Option<u64>),
+    MouseReleased,
     RefreshTime,
     TabSelected(Tab),
     TitleBarDrag,
@@ -118,6 +122,9 @@ impl Application for App {
                 hover_left: false,
                 hover_right: false,
                 hovered_heat_date: None,
+                hovered_task_id: None,
+                drag_task_id: None,
+                drag_target_idx: 0,
                 audio: AudioPlayer::new(),
             },
             Command::none(),
@@ -146,6 +153,9 @@ impl Application for App {
                 Some(Message::MouseMoved(position))
             }
             iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::MouseLeft),
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+                iced::mouse::Button::Left,
+            )) => Some(Message::MouseReleased),
             _ => None,
         });
         Subscription::batch(vec![tick, clock, mouse_events])
@@ -194,14 +204,19 @@ impl Application for App {
                 self.tasks.retain(|t| !t.done);
                 self.persist();
             }
-            Message::TaskMoveUp(id) => {
-                if let Some(i) = self.tasks.iter().position(|t| t.id == id) {
-                    if i > 0 { self.click(); self.tasks.swap(i, i - 1); self.persist(); }
-                }
+            Message::TaskDragStart { id, idx } => {
+                self.drag_task_id = Some(id);
+                self.drag_target_idx = idx;
             }
-            Message::TaskMoveDown(id) => {
-                if let Some(i) = self.tasks.iter().position(|t| t.id == id) {
-                    if i + 1 < self.tasks.len() { self.click(); self.tasks.swap(i, i + 1); self.persist(); }
+            Message::TaskHovered(id) => self.hovered_task_id = id,
+            Message::MouseReleased => {
+                if let Some(drag_id) = self.drag_task_id.take() {
+                    if let Some(src) = self.tasks.iter().position(|t| t.id == drag_id) {
+                        let task = self.tasks.remove(src);
+                        let dst = self.drag_target_idx.min(self.tasks.len());
+                        self.tasks.insert(dst, task);
+                        self.persist();
+                    }
                 }
             }
             Message::RefreshTime => self.tod = TimeOfDay::now(),
@@ -222,11 +237,19 @@ impl Application for App {
                 if pos.y < 40.0 {
                     self.hide_in_ticks = 6;
                 }
+                if self.drag_task_id.is_some() && !self.tasks.is_empty() {
+                    // Approximate: task list starts ~75px from top, each row ~31px
+                    let raw = ((pos.y - 75.0) / 31.0).floor() as isize;
+                    self.drag_target_idx =
+                        raw.clamp(0, self.tasks.len() as isize - 1) as usize;
+                }
             }
             Message::MouseLeft => {
                 self.hide_in_ticks = 0;
                 self.hover_left = false;
                 self.hover_right = false;
+                self.drag_task_id = None;
+                self.hovered_task_id = None;
             }
             Message::HoverLeft(v) => self.hover_left = v,
             Message::HoverRight(v) => self.hover_right = v,
@@ -248,7 +271,7 @@ impl Application for App {
 
         let content: Element<Message> = match self.active_tab {
             Tab::Timer => timer_view(p, &self.timer),
-            Tab::Tasks => tasks_view(p, &self.tasks, &self.task_input),
+            Tab::Tasks => tasks_view(p, &self.tasks, &self.task_input, self.hovered_task_id, self.drag_task_id, self.drag_target_idx),
             Tab::Heatmap => heatmap_view(p, &self.heatmap, self.hovered_heat_date),
         };
 
@@ -514,13 +537,22 @@ fn timer_view(p: Palette, timer: &Pomodoro) -> Element<Message> {
 
 // ── Tasks View ────────────────────────────────────────────────────────────
 
-fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, Message> {
+fn tasks_view<'a>(
+    p: Palette,
+    tasks: &'a [Task],
+    input: &'a str,
+    hovered_task_id: Option<u64>,
+    drag_task_id: Option<u64>,
+    drag_target_idx: usize,
+) -> Element<'a, Message> {
     let pending = tasks.iter().filter(|t| !t.done).count();
     let done_count = tasks.len() - pending;
 
-    let mut clear_btn = button(text("clear done").size(10).style(iced_theme::Text::Color(p.subtext)))
-        .padding([2, 6])
-        .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))));
+    let mut clear_btn = button(
+        text("clear done").size(10).style(iced_theme::Text::Color(p.subtext)),
+    )
+    .padding([2, 6])
+    .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))));
     if done_count > 0 {
         clear_btn = clear_btn.on_press(Message::TaskClearDone);
     }
@@ -540,11 +572,43 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
     ])
     .align_items(Alignment::Center);
 
-    let n = tasks.len();
-    let items: Vec<Element<Message>> = tasks
+    // Real-time drag preview: show the list in drag-target order while dragging
+    let display: Vec<&Task> = if let Some(drag_id) = drag_task_id {
+        if let Some(src) = tasks.iter().position(|t| t.id == drag_id) {
+            let mut order: Vec<&Task> = tasks.iter().collect();
+            let item = order.remove(src);
+            let dst = drag_target_idx.min(order.len());
+            order.insert(dst, item);
+            order
+        } else {
+            tasks.iter().collect()
+        }
+    } else {
+        tasks.iter().collect()
+    };
+
+    let items: Vec<Element<Message>> = display
         .iter()
         .enumerate()
-        .map(|(i, task)| {
+        .map(|(i, &task)| {
+            let is_dragging = drag_task_id == Some(task.id);
+            let is_hovered = hovered_task_id == Some(task.id);
+
+            // Grip handle: invisible by default, fades in on hover, solid while dragging
+            let grip_alpha: f32 =
+                if is_dragging { 0.7 } else if is_hovered { 0.45 } else { 0.0 };
+            let grip = mouse_area(
+                container(
+                    text("≡")
+                        .size(13)
+                        .style(iced_theme::Text::Color(Color { a: grip_alpha, ..p.subtext })),
+                )
+                .width(Length::Fixed(16.0))
+                .center_x()
+                .center_y(),
+            )
+            .on_press(Message::TaskDragStart { id: task.id, idx: i });
+
             let check = button(
                 text(if task.done { "✓" } else { " " })
                     .size(10)
@@ -559,38 +623,36 @@ fn tasks_view<'a>(p: Palette, tasks: &'a [Task], input: &'a str) -> Element<'a, 
             })))
             .on_press(Message::TaskToggle(task.id));
 
-            let label = text(&task.text)
-                .size(12)
-                .style(iced_theme::Text::Color(
-                    if task.done { p.subtext } else { p.text },
-                ));
-
-            let mut up_btn = button(text("↑").size(8))
-                .padding([2, 4])
-                .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))));
-            if i > 0 { up_btn = up_btn.on_press(Message::TaskMoveUp(task.id)); }
-
-            let mut down_btn = button(text("↓").size(8))
-                .padding([2, 4])
-                .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))));
-            if i + 1 < n { down_btn = down_btn.on_press(Message::TaskMoveDown(task.id)); }
+            let label = text(&task.text).size(12).style(iced_theme::Text::Color(
+                if task.done { p.subtext } else { p.text },
+            ));
 
             let del = button(text("✕").size(9))
                 .padding([3, 5])
                 .style(iced_theme::Button::Custom(Box::new(DeleteBtn(p))))
                 .on_press(Message::TaskDelete(task.id));
 
-            container(
-                row(vec![
-                    check.into(),
-                    container(label).padding([0, 8]).width(Length::Fill).into(),
-                    up_btn.into(),
-                    down_btn.into(),
-                    del.into(),
-                ])
-                .align_items(Alignment::Center),
+            let row_style = if is_dragging {
+                iced_theme::Container::Custom(Box::new(DragRow(p)))
+            } else {
+                iced_theme::Container::Custom(Box::new(Flat))
+            };
+
+            mouse_area(
+                container(
+                    row(vec![
+                        grip.into(),
+                        check.into(),
+                        container(label).padding([0, 8]).width(Length::Fill).into(),
+                        del.into(),
+                    ])
+                    .align_items(Alignment::Center),
+                )
+                .padding([4, 2])
+                .style(row_style),
             )
-            .padding([4, 2])
+            .on_enter(Message::TaskHovered(Some(task.id)))
+            .on_exit(Message::TaskHovered(None))
             .into()
         })
         .collect();

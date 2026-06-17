@@ -450,6 +450,18 @@ impl container::StyleSheet for Sidebar {
     }
 }
 
+pub struct DragRow(pub Palette);
+impl container::StyleSheet for DragRow {
+    type Style = iced::Theme;
+    fn appearance(&self, _: &iced::Theme) -> container::Appearance {
+        container::Appearance {
+            background: Some(Background::Color(Color { a: 0.12, ..self.0.accent })),
+            border: Border { radius: 6.0.into(), color: Color { a: 0.30, ..self.0.accent }, width: 1.0 },
+            ..Default::default()
+        }
+    }
+}
+
 pub struct PinBtn { pub p: Palette, pub active: bool }
 impl button::StyleSheet for PinBtn {
     type Style = iced::Theme;
