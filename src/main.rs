@@ -6,7 +6,7 @@ mod storage;
 mod theme;
 
 use chrono::{Datelike, NaiveDate, Timelike};
-use data::{Heatmap, Phase, Pomodoro, SessionConfig, Task, TimerPreset};
+use data::{Heatmap, Phase, Pomodoro, SessionConfig, SoundOption, Task, TimerPreset};
 use iced::theme as iced_theme;
 use iced::widget::{
     button, column, container, mouse_area, progress_bar, row, scrollable, text, text_input, Space,
@@ -79,6 +79,7 @@ struct App {
     custom_work_input: String,
     custom_short_input: String,
     custom_long_input: String,
+    sound_option: SoundOption,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +116,7 @@ enum Message {
     CustomShortChanged(String),
     CustomLongChanged(String),
     ApplyCustomPreset,
+    SetSound(SoundOption),
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -153,6 +155,7 @@ impl Application for App {
                 custom_work_input: cfg.work_mins.to_string(),
                 custom_short_input: cfg.short_mins.to_string(),
                 custom_long_input: cfg.long_mins.to_string(),
+                sound_option: s.sound_option,
             },
             Command::none(),
         )
@@ -365,6 +368,11 @@ impl Application for App {
                 self.timer.set_config(cfg);
                 self.persist();
             }
+            Message::SetSound(opt) => {
+                self.sound_option = opt;
+                self.chime();
+                self.persist();
+            }
         }
         Command::none()
     }
@@ -386,6 +394,7 @@ impl Application for App {
                 &self.custom_work_input,
                 &self.custom_short_input,
                 &self.custom_long_input,
+                self.sound_option,
             )
         } else {
             let tab_content: Element<Message> = match self.active_tab {
@@ -440,7 +449,7 @@ impl App {
         if let Some(ref a) = self.audio { a.play_click(); }
     }
     fn chime(&self) {
-        if let Some(ref a) = self.audio { a.play_chime(); }
+        if let Some(ref a) = self.audio { a.play_alert(self.sound_option); }
     }
 
     fn persist(&self) {
@@ -450,6 +459,7 @@ impl App {
             next_id: self.next_id,
             pomodoros_done: self.timer.done,
             session_config: self.timer.config,
+            sound_option: self.sound_option,
         });
     }
 }
@@ -857,6 +867,7 @@ fn settings_view<'a>(
     work_input: &'a str,
     short_input: &'a str,
     long_input: &'a str,
+    sound_option: SoundOption,
 ) -> Element<'a, Message> {
     let preset_btn = |preset: TimerPreset, label: &'static str| -> Element<'a, Message> {
         let active = config.preset == preset;
@@ -890,6 +901,34 @@ fn settings_view<'a>(
         .size(9)
         .style(iced_theme::Text::Color(p.subtext));
 
+    let sound_btn = |opt: SoundOption| -> Element<'a, Message> {
+        let active = sound_option == opt;
+        button(text(opt.label()).size(11))
+            .width(Length::Fill)
+            .padding([7, 0])
+            .style(iced_theme::Button::Custom(if active {
+                Box::new(AccentBtn(p)) as Box<dyn iced::widget::button::StyleSheet<Style = iced::Theme>>
+            } else {
+                Box::new(GhostBtn(p))
+            }))
+            .on_press(Message::SetSound(opt))
+            .into()
+    };
+
+    let sound_row1 = row(vec![
+        sound_btn(SoundOption::Chime),
+        Space::with_width(8).into(),
+        sound_btn(SoundOption::KitchenTimer),
+    ])
+    .align_items(Alignment::Center);
+
+    let sound_row2 = row(vec![
+        sound_btn(SoundOption::Angelic),
+        Space::with_width(8).into(),
+        Space::with_width(Length::Fill).into(),
+    ])
+    .align_items(Alignment::Center);
+
     let mut inner_items: Vec<Element<Message>> = vec![
         row(vec![
             text("settings")
@@ -916,6 +955,15 @@ fn settings_view<'a>(
         preset_row2.into(),
         Space::with_height(8).into(),
         desc.into(),
+        Space::with_height(14).into(),
+        text("Completion Sound")
+            .size(10)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into(),
+        Space::with_height(6).into(),
+        sound_row1.into(),
+        Space::with_height(6).into(),
+        sound_row2.into(),
     ];
 
     if config.preset == TimerPreset::Custom {
@@ -960,7 +1008,7 @@ fn settings_view<'a>(
     }
 
     container(
-        column(inner_items).padding([14, 20]),
+        scrollable(column(inner_items).padding([14, 20])).height(Length::Fill),
     )
     .width(Length::Fill)
     .height(Length::Fill)

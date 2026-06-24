@@ -1,4 +1,4 @@
-use crate::data::{Heatmap, SessionConfig, Task};
+use crate::data::{Heatmap, SessionConfig, SoundOption, Task};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -14,6 +14,8 @@ pub struct SaveData {
     pub pomodoros_done: u32,
     #[serde(default)]
     pub session_config: SessionConfig,
+    #[serde(default)]
+    pub sound_option: SoundOption,
 }
 
 fn data_path() -> PathBuf {

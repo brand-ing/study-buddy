@@ -155,6 +155,24 @@ impl Pomodoro {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
+pub enum SoundOption {
+    #[default]
+    Chime,
+    KitchenTimer,
+    Angelic,
+}
+
+impl SoundOption {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Chime       => "Chime",
+            Self::KitchenTimer => "Kitchen Timer",
+            Self::Angelic     => "Angelic",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Heatmap {
     pub data: HashMap<String, u32>,

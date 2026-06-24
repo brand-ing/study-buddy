@@ -1,4 +1,4 @@
-use chrono::Timelike;
+﻿use chrono::Timelike;
 use iced::widget::{button, container, progress_bar, text_input};
 use iced::{application, Background, Border, Color};
 
@@ -140,7 +140,7 @@ pub fn heat_color(minutes: u32, p: Palette) -> Color {
     }
 }
 
-// ── StyleSheet Implementations ────────────────────────────────────────────
+// â”€â”€ StyleSheet Implementations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 pub struct AppBg(pub Palette);
 impl application::StyleSheet for AppBg {
@@ -159,7 +159,7 @@ impl container::StyleSheet for Surface {
     fn appearance(&self, _: &iced::Theme) -> container::Appearance {
         container::Appearance {
             background: Some(Background::Color(if self.1 { self.0.surface2 } else { self.0.surface })),
-            border: Border { radius: 12.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             text_color: Some(self.0.text),
             ..Default::default()
         }
@@ -180,7 +180,7 @@ impl container::StyleSheet for HeatCell {
     fn appearance(&self, _: &iced::Theme) -> container::Appearance {
         container::Appearance {
             background: Some(Background::Color(self.0)),
-            border: Border { radius: 3.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -192,7 +192,7 @@ impl container::StyleSheet for DotCell {
     fn appearance(&self, _: &iced::Theme) -> container::Appearance {
         container::Appearance {
             background: Some(Background::Color(self.0)),
-            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -205,7 +205,7 @@ impl button::StyleSheet for AccentBtn {
         button::Appearance {
             background: Some(Background::Color(self.0.accent)),
             text_color: self.0.bg,
-            border: Border { radius: 8.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -229,7 +229,7 @@ impl button::StyleSheet for GhostBtn {
         button::Appearance {
             background: None,
             text_color: self.0.subtext,
-            border: Border { radius: 8.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -237,7 +237,7 @@ impl button::StyleSheet for GhostBtn {
         button::Appearance {
             background: Some(Background::Color(Color { a: 0.1, ..self.0.accent })),
             text_color: self.0.accent,
-            border: Border { radius: 8.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -254,7 +254,7 @@ impl button::StyleSheet for TaskCheckBtn {
                 if self.done { self.p.success } else { self.p.surface2 }
             )),
             text_color: if self.done { self.p.bg } else { self.p.subtext },
-            border: Border { radius: 5.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -270,7 +270,7 @@ impl button::StyleSheet for DeleteBtn {
         button::Appearance {
             background: None,
             text_color: Color { a: 0.0, ..Color::BLACK },
-            border: Border { radius: 5.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -278,7 +278,7 @@ impl button::StyleSheet for DeleteBtn {
         button::Appearance {
             background: Some(Background::Color(Color { r: 0.9, g: 0.2, b: 0.2, a: 0.15 })),
             text_color: Color { r: 0.85, g: 0.25, b: 0.25, a: 1.0 },
-            border: Border { radius: 5.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -292,14 +292,14 @@ impl text_input::StyleSheet for TaskInput {
     fn active(&self, _: &iced::Theme) -> text_input::Appearance {
         text_input::Appearance {
             background: Background::Color(self.0.surface2),
-            border: Border { radius: 8.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             icon_color: self.0.subtext,
         }
     }
     fn focused(&self, _: &iced::Theme) -> text_input::Appearance {
         text_input::Appearance {
             background: Background::Color(self.0.surface),
-            border: Border { radius: 8.0.into(), color: self.0.accent, width: 1.5 },
+            border: Border { radius: 0.0.into(), color: self.0.accent, width: 1.5 },
             icon_color: self.0.accent,
         }
     }
@@ -320,14 +320,14 @@ impl progress_bar::StyleSheet for ProgressStyle {
         progress_bar::Appearance {
             background: Background::Color(self.0.surface2),
             bar: Background::Color(self.0.accent),
-            border_radius: 2.0.into(),
+            border_radius: 0.0.into(),
         }
     }
 }
 
-// ── Titlebar / Navigation ─────────────────────────────────────────────────
+// â”€â”€ Titlebar / Navigation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/// Invisible drag area — no visual change, just captures clicks for window drag.
+/// Invisible drag area â€” no visual change, just captures clicks for window drag.
 pub struct DragBtn;
 impl button::StyleSheet for DragBtn {
     type Style = iced::Theme;
@@ -355,7 +355,7 @@ impl button::StyleSheet for TabBtn {
                 None
             },
             text_color: if self.active { self.p.accent } else { self.p.subtext },
-            border: Border { radius: 6.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -363,7 +363,7 @@ impl button::StyleSheet for TabBtn {
         button::Appearance {
             background: Some(Background::Color(Color { a: 0.08, ..self.p.accent })),
             text_color: self.p.accent,
-            border: Border { radius: 6.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -378,7 +378,7 @@ impl button::StyleSheet for CloseBtn {
         button::Appearance {
             background: None,
             text_color: self.0.subtext,
-            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -386,7 +386,7 @@ impl button::StyleSheet for CloseBtn {
         button::Appearance {
             background: Some(Background::Color(Color { r: 0.85, g: 0.18, b: 0.18, a: 0.88 })),
             text_color: Color::WHITE,
-            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -400,7 +400,7 @@ impl container::StyleSheet for OuterBorder {
     fn appearance(&self, _: &iced::Theme) -> container::Appearance {
         container::Appearance {
             background: Some(Background::Color(self.0.bg)),
-            border: Border { radius: 10.0.into(), color: self.0.surface2, width: 1.0 },
+            border: Border { radius: 0.0.into(), color: self.0.surface2, width: 1.0 },
             ..Default::default()
         }
     }
@@ -412,7 +412,7 @@ impl container::StyleSheet for SettingsCard {
     fn appearance(&self, _: &iced::Theme) -> container::Appearance {
         container::Appearance {
             background: Some(Background::Color(self.0.surface)),
-            border: Border { radius: 8.0.into(), color: self.0.surface2, width: 1.0 },
+            border: Border { radius: 0.0.into(), color: self.0.surface2, width: 1.0 },
             ..Default::default()
         }
     }
@@ -425,7 +425,7 @@ impl container::StyleSheet for HoverBar {
         container::Appearance {
             background: Some(Background::Color(self.0.surface)),
             border: Border {
-                radius: [10.0, 10.0, 0.0, 0.0].into(),
+                radius: 0.0.into(),
                 color: Color::TRANSPARENT,
                 width: 0.0,
             },
@@ -441,7 +441,7 @@ impl container::StyleSheet for Sidebar {
         container::Appearance {
             background: Some(Background::Color(self.0.surface)),
             border: Border {
-                radius: [10.0, 0.0, 0.0, 10.0].into(),
+                radius: 0.0.into(),
                 color: Color::TRANSPARENT,
                 width: 0.0,
             },
@@ -456,7 +456,7 @@ impl container::StyleSheet for DragRow {
     fn appearance(&self, _: &iced::Theme) -> container::Appearance {
         container::Appearance {
             background: Some(Background::Color(Color { a: 0.12, ..self.0.accent })),
-            border: Border { radius: 6.0.into(), color: Color { a: 0.30, ..self.0.accent }, width: 1.0 },
+            border: Border { radius: 0.0.into(), color: Color { a: 0.30, ..self.0.accent }, width: 1.0 },
             ..Default::default()
         }
     }
@@ -473,7 +473,7 @@ impl button::StyleSheet for SettingsBtn {
                 None
             },
             text_color: if self.active { self.p.accent } else { self.p.subtext },
-            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -481,7 +481,7 @@ impl button::StyleSheet for SettingsBtn {
         button::Appearance {
             background: Some(Background::Color(Color { a: 0.08, ..self.p.accent })),
             text_color: self.p.accent,
-            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -500,7 +500,7 @@ impl button::StyleSheet for PinBtn {
                 None
             },
             text_color: if self.active { self.p.accent } else { self.p.subtext },
-            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
@@ -508,7 +508,7 @@ impl button::StyleSheet for PinBtn {
         button::Appearance {
             background: Some(Background::Color(Color { a: 0.08, ..self.p.accent })),
             text_color: self.p.accent,
-            border: Border { radius: 4.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            border: Border { radius: 0.0.into(), color: Color::TRANSPARENT, width: 0.0 },
             ..Default::default()
         }
     }
