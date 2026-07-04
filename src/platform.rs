@@ -32,11 +32,13 @@ pub fn setup_tray() {
         tray_icon::Icon::from_rgba(rgba, S, S).expect("tray icon rgba")
     };
 
-    let menu = tray_icon::menu::Menu::new();
-    let show_i = tray_icon::menu::MenuItem::with_id("show", "Show focus", true, None);
-    let quit_i = tray_icon::menu::MenuItem::with_id("quit", "Quit", true, None);
-    let sep    = tray_icon::menu::PredefinedMenuItem::separator();
-    let _ = menu.append_items(&[&show_i, &sep, &quit_i]);
+    let menu     = tray_icon::menu::Menu::new();
+    let quit_i   = tray_icon::menu::MenuItem::with_id("quit",         "Quit",             true, None);
+    let update_i = tray_icon::menu::MenuItem::with_id("check_update", "Check for update", true, None);
+    let sep      = tray_icon::menu::PredefinedMenuItem::separator();
+    let show_i   = tray_icon::menu::MenuItem::with_id("show",         "Show focus",       true, None);
+    // Quit at top so it's never clipped by the taskbar; Show at bottom near the tray icon
+    let _ = menu.append_items(&[&quit_i, &update_i, &sep, &show_i]);
 
     let tray = tray_icon::TrayIconBuilder::new()
         .with_tooltip("focus")
@@ -110,6 +112,68 @@ pub fn get_autostart() -> bool {
     hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
         .and_then(|k| k.get_value::<String, _>("focus"))
         .is_ok()
+}
+
+// ── Update check ──────────────────────────────────────────────────────────
+
+pub fn check_for_update(current_version: &str) {
+    let current = current_version.to_owned();
+    std::thread::spawn(move || {
+        const API: &str =
+            "https://api.github.com/repos/brand-ing/study-buddy/releases/latest";
+
+        let result = ureq::get(API)
+            .set("User-Agent", "focus-app")
+            .call();
+
+        let toast = |title: &str, body: &str, long: bool| {
+            let dur = if long {
+                winrt_notification::Duration::Long
+            } else {
+                winrt_notification::Duration::Short
+            };
+            let _ = winrt_notification::Toast::new(winrt_notification::Toast::POWERSHELL_APP_ID)
+                .title(title)
+                .text1(body)
+                .duration(dur)
+                .show();
+        };
+
+        match result {
+            Ok(resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                let json: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                let latest = json["tag_name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim_start_matches('v');
+
+                if latest.is_empty() {
+                    toast("focus  ·  update check failed", "no release found on github", false);
+                } else if latest == current.as_str() {
+                    toast(
+                        "focus  ·  you're up to date",
+                        &format!("version {} is the latest", current),
+                        false,
+                    );
+                } else {
+                    toast(
+                        &format!("focus  ·  {} available", latest),
+                        "visit github.com/brand-ing/study-buddy to download",
+                        true,
+                    );
+                }
+            }
+            Err(_) => {
+                toast(
+                    "focus  ·  update check failed",
+                    "couldn't reach github — check your connection",
+                    false,
+                );
+            }
+        }
+    });
 }
 
 pub fn set_autostart(enable: bool) {

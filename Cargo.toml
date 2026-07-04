@@ -1,6 +1,6 @@
 [package]
 name = "study-buddy"
-version = "0.0.5"
+version = "0.1.1"
 edition = "2021"
 
 [[bin]]
@@ -20,3 +20,4 @@ global-hotkey = "0.6"
 winrt-notification = "0.4"
 winreg = "0.52"
 windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+ureq = "2"

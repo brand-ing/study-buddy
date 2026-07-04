@@ -16,6 +16,8 @@ pub struct SaveData {
     pub session_config: SessionConfig,
     #[serde(default)]
     pub sound_option: SoundOption,
+    #[serde(default)]
+    pub last_seen_version: String,
 }
 
 fn data_path() -> PathBuf {

@@ -26,6 +26,7 @@ use theme::{
 };
 
 const APP_NAME: &str = "focus";
+const CURRENT_VERSION: &str = "0.1.1";
 
 // ── Navigation ────────────────────────────────────────────────────────────
 
@@ -86,6 +87,8 @@ struct App {
     show_shortcuts: bool,
     // system
     autostart: bool,
+    // changelog
+    show_changelog: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +142,9 @@ enum Message {
     // panels
     ToggleShortcuts,
     ToggleAutostart,
+    DismissChangelog,
+    // tray actions
+    TrayCheckUpdate,
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -180,6 +186,7 @@ impl Application for App {
                 sound_option: s.sound_option,
                 show_shortcuts: false,
                 autostart: platform::get_autostart(),
+                show_changelog: s.last_seen_version != CURRENT_VERSION,
             },
             Command::none(),
         )
@@ -247,8 +254,9 @@ impl Application for App {
                 }
                 if let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
                     match ev.id.0.as_str() {
-                        "show" => { tx.send(Message::TrayShow).await.ok(); }
-                        "quit" => { tx.send(Message::TrayQuit).await.ok(); }
+                        "show"         => { tx.send(Message::TrayShow).await.ok(); }
+                        "quit"         => { tx.send(Message::TrayQuit).await.ok(); }
+                        "check_update" => { tx.send(Message::TrayCheckUpdate).await.ok(); }
                         _ => {}
                     }
                 }
@@ -501,6 +509,13 @@ impl Application for App {
                 self.autostart = !self.autostart;
                 platform::set_autostart(self.autostart);
             }
+            Message::DismissChangelog => {
+                self.show_changelog = false;
+                self.persist();
+            }
+            Message::TrayCheckUpdate => {
+                platform::check_for_update(CURRENT_VERSION);
+            }
         }
         Command::none()
     }
@@ -515,7 +530,9 @@ impl Application for App {
             None
         };
 
-        let content: Element<Message> = if self.show_shortcuts {
+        let content: Element<Message> = if self.show_changelog {
+            changelog_view(p)
+        } else if self.show_shortcuts {
             shortcuts_view(p)
         } else if self.show_settings {
             settings_view(
@@ -563,7 +580,7 @@ impl Application for App {
         let body = column(vec![
             top_bar(p, show_controls, self.always_on_top, session_color, self.show_settings, self.show_shortcuts),
             content,
-            page_dots(p, self.active_tab, self.show_settings || self.show_shortcuts),
+            page_dots(p, self.active_tab, self.show_settings || self.show_shortcuts || self.show_changelog),
         ])
         .height(Length::Fill);
 
@@ -591,6 +608,7 @@ impl App {
             pomodoros_done: self.timer.done,
             session_config: self.timer.config,
             sound_option: self.sound_option,
+            last_seen_version: CURRENT_VERSION.to_string(),
         });
     }
 }
@@ -1249,6 +1267,80 @@ fn shortcuts_view(p: Palette) -> Element<'static, Message> {
 
     container(
         scrollable(column(items).padding([14, 20])).height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(iced_theme::Container::Custom(Box::new(Flat)))
+    .into()
+}
+
+// ── Changelog View ────────────────────────────────────────────────────────
+
+fn changelog_view(p: Palette) -> Element<'static, Message> {
+    let heading = |s: &'static str| -> Element<'static, Message> {
+        text(s)
+            .size(10)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into()
+    };
+
+    let bullet = move |s: &'static str| -> Element<'static, Message> {
+        row(vec![
+            text("·")
+                .size(11)
+                .style(iced_theme::Text::Color(p.accent))
+                .width(Length::Fixed(14.0))
+                .into(),
+            text(s)
+                .size(11)
+                .style(iced_theme::Text::Color(p.text))
+                .into(),
+        ])
+        .into()
+    };
+
+    let items: Vec<Element<Message>> = vec![
+        row(vec![
+            text(format!("what's new  ·  {}", CURRENT_VERSION))
+                .size(13)
+                .style(iced_theme::Text::Color(p.text))
+                .into(),
+        ])
+        .into(),
+        Space::with_height(14).into(),
+        heading("System"),
+        Space::with_height(5).into(),
+        bullet("Close to tray — app keeps running in the background"),
+        Space::with_height(3).into(),
+        bullet("Ctrl+Shift+F — show or hide from anywhere"),
+        Space::with_height(3).into(),
+        bullet("Launch at login — toggle in Settings"),
+        Space::with_height(12).into(),
+        heading("Notifications"),
+        Space::with_height(5).into(),
+        bullet("Desktop alert when a work session ends"),
+        Space::with_height(12).into(),
+        heading("Shortcuts"),
+        Space::with_height(5).into(),
+        bullet("Space / R / S / ← → timer controls"),
+        Space::with_height(3).into(),
+        bullet("? button opens the shortcut reference panel"),
+        Space::with_height(12).into(),
+        heading("Updates"),
+        Space::with_height(5).into(),
+        bullet("Check for update from the system tray menu"),
+        Space::with_height(3).into(),
+        bullet("Changelog shown after each update"),
+        Space::with_height(18).into(),
+        button(text("Got it").size(11))
+            .padding([7, 24])
+            .style(iced_theme::Button::Custom(Box::new(AccentBtn(p))))
+            .on_press(Message::DismissChangelog)
+            .into(),
+    ];
+
+    container(
+        scrollable(column(items).padding([18, 20])).height(Length::Fill),
     )
     .width(Length::Fill)
     .height(Length::Fill)

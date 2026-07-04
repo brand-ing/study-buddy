@@ -12,7 +12,7 @@
 ; Inno Setup 6: https://jrsoftware.org/isinfo.php
 
 #define AppName      "focus"
-#define AppVersion   "0.0.5"
+#define AppVersion   "0.1.1"
 #define AppPublisher "brand-ing"
 #define AppExeName   "focus.exe"
 #define SourceExe    "target\release\" + AppExeName
