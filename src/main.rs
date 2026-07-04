@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod data;
+mod platform;
 mod sound;
 mod storage;
 mod theme;
@@ -14,7 +15,8 @@ use iced::widget::{
 use iced::{
     Alignment, Application, Color, Command, Element, Length, Settings, Subscription, Theme,
 };
-use iced::{time, window};
+use iced::futures::SinkExt;
+use iced::{subscription, time, window};
 use sound::AudioPlayer;
 use storage::SaveData;
 use theme::{
@@ -80,6 +82,10 @@ struct App {
     custom_short_input: String,
     custom_long_input: String,
     sound_option: SoundOption,
+    // shortcuts panel
+    show_shortcuts: bool,
+    // system
+    autostart: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +123,22 @@ enum Message {
     CustomLongChanged(String),
     ApplyCustomPreset,
     SetSound(SoundOption),
+    // tray
+    HideToTray,
+    TrayShow,
+    TrayQuit,
+    // global hotkey
+    GlobalHotkeyFired,
+    // keyboard
+    KeySpace,
+    KeyR,
+    KeyS,
+    KeyLeft,
+    KeyRight,
+    KeyEscape,
+    // panels
+    ToggleShortcuts,
+    ToggleAutostart,
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -156,6 +178,8 @@ impl Application for App {
                 custom_short_input: cfg.short_mins.to_string(),
                 custom_long_input: cfg.long_mins.to_string(),
                 sound_option: s.sound_option,
+                show_shortcuts: false,
+                autostart: platform::get_autostart(),
             },
             Command::none(),
         )
@@ -178,7 +202,7 @@ impl Application for App {
             Subscription::none()
         };
         let clock = time::every(Duration::from_secs(60)).map(|_| Message::RefreshTime);
-        let mouse_events = iced::event::listen_with(|event, _status| match event {
+        let events = iced::event::listen_with(|event, status| match event {
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                 Some(Message::MouseMoved(position))
             }
@@ -186,9 +210,67 @@ impl Application for App {
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
                 iced::mouse::Button::Left,
             )) => Some(Message::MouseReleased),
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. })
+                if status == iced::event::Status::Ignored =>
+            {
+                use iced::keyboard::key::Named;
+                match &key {
+                    iced::keyboard::Key::Named(Named::Space) => Some(Message::KeySpace),
+                    iced::keyboard::Key::Character(c) if c.as_str() == "r" => Some(Message::KeyR),
+                    iced::keyboard::Key::Character(c) if c.as_str() == "s" => Some(Message::KeyS),
+                    iced::keyboard::Key::Character(c)
+                        if c.as_str() == "?" || c.as_str() == "/" =>
+                    {
+                        Some(Message::ToggleShortcuts)
+                    }
+                    iced::keyboard::Key::Named(Named::ArrowLeft) => Some(Message::KeyLeft),
+                    iced::keyboard::Key::Named(Named::ArrowRight) => Some(Message::KeyRight),
+                    iced::keyboard::Key::Named(Named::Escape) => Some(Message::KeyEscape),
+                    _ => None,
+                }
+            }
             _ => None,
         });
-        Subscription::batch(vec![tick, clock, mouse_events])
+
+        let tray_events = subscription::channel(0xDEAD_BEEF_u64, 16, |mut tx| async move {
+            loop {
+                use tray_icon::{TrayIconEvent, MouseButton, MouseButtonState};
+                if let Ok(ev) = TrayIconEvent::receiver().try_recv() {
+                    if matches!(ev,
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up, ..
+                        }
+                    ) {
+                        tx.send(Message::TrayShow).await.ok();
+                    }
+                }
+                if let Ok(ev) = tray_icon::menu::MenuEvent::receiver().try_recv() {
+                    match ev.id.0.as_str() {
+                        "show" => { tx.send(Message::TrayShow).await.ok(); }
+                        "quit" => { tx.send(Message::TrayQuit).await.ok(); }
+                        _ => {}
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        });
+
+        let hotkey_events = subscription::channel(0xCAFE_DEAD_u64, 8, |mut tx| async move {
+            loop {
+                if let Ok(ev) = global_hotkey::GlobalHotKeyEvent::receiver().try_recv() {
+                    use global_hotkey::HotKeyState;
+                    if ev.state == HotKeyState::Pressed
+                        && platform::show_hotkey_id() == Some(ev.id)
+                    {
+                        tx.send(Message::GlobalHotkeyFired).await.ok();
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        });
+
+        Subscription::batch(vec![tick, clock, events, tray_events, hotkey_events])
     }
 
     fn update(&mut self, msg: Message) -> Command<Message> {
@@ -196,6 +278,7 @@ impl Application for App {
             Message::Tick => {
                 if self.timer.running && self.timer.tick() {
                     self.chime();
+                    platform::notify_work_done();
                     self.heatmap.add(self.timer.config.work_mins);
                     self.persist();
                 }
@@ -311,6 +394,7 @@ impl Application for App {
             Message::TabSelected(tab) => self.active_tab = tab,
             Message::TitleBarDrag => return window::drag(window::Id::MAIN),
             Message::WindowClose => return window::close(window::Id::MAIN),
+            Message::HideToTray => { platform::hide_window(); }
             Message::ToggleAlwaysOnTop => {
                 self.click();
                 self.always_on_top = !self.always_on_top;
@@ -373,6 +457,50 @@ impl Application for App {
                 self.chime();
                 self.persist();
             }
+            // tray / hotkey
+            Message::TrayShow | Message::GlobalHotkeyFired => { platform::show_window(); }
+            Message::TrayQuit => return window::close(window::Id::MAIN),
+            // keyboard shortcuts
+            Message::KeySpace => {
+                let mut m = Message::TimerToggle;
+                // if settings or shortcuts are open, close them instead
+                if self.show_settings || self.show_shortcuts {
+                    m = Message::KeyEscape;
+                }
+                return self.update(m);
+            }
+            Message::KeyR => {
+                if !self.show_settings && !self.show_shortcuts {
+                    return self.update(Message::TimerReset);
+                }
+            }
+            Message::KeyS => {
+                if !self.show_settings && !self.show_shortcuts {
+                    return self.update(Message::TimerSkip);
+                }
+            }
+            Message::KeyLeft => {
+                if !self.show_settings && !self.show_shortcuts {
+                    return self.update(Message::TabSelected(self.active_tab.prev()));
+                }
+            }
+            Message::KeyRight => {
+                if !self.show_settings && !self.show_shortcuts {
+                    return self.update(Message::TabSelected(self.active_tab.next()));
+                }
+            }
+            Message::KeyEscape => {
+                if self.show_shortcuts { self.show_shortcuts = false; }
+                else if self.show_settings { self.show_settings = false; }
+            }
+            Message::ToggleShortcuts => {
+                self.show_settings = false;
+                self.show_shortcuts = !self.show_shortcuts;
+            }
+            Message::ToggleAutostart => {
+                self.autostart = !self.autostart;
+                platform::set_autostart(self.autostart);
+            }
         }
         Command::none()
     }
@@ -387,7 +515,9 @@ impl Application for App {
             None
         };
 
-        let content: Element<Message> = if self.show_settings {
+        let content: Element<Message> = if self.show_shortcuts {
+            shortcuts_view(p)
+        } else if self.show_settings {
             settings_view(
                 p,
                 &self.timer.config,
@@ -395,6 +525,7 @@ impl Application for App {
                 &self.custom_short_input,
                 &self.custom_long_input,
                 self.sound_option,
+                self.autostart,
             )
         } else {
             let tab_content: Element<Message> = match self.active_tab {
@@ -430,9 +561,9 @@ impl Application for App {
         };
 
         let body = column(vec![
-            top_bar(p, show_controls, self.always_on_top, session_color, self.show_settings),
+            top_bar(p, show_controls, self.always_on_top, session_color, self.show_settings, self.show_shortcuts),
             content,
-            page_dots(p, self.active_tab, self.show_settings),
+            page_dots(p, self.active_tab, self.show_settings || self.show_shortcuts),
         ])
         .height(Length::Fill);
 
@@ -472,6 +603,7 @@ fn top_bar(
     always_on_top: bool,
     session_color: Option<Color>,
     show_settings: bool,
+    show_shortcuts: bool,
 ) -> Element<'static, Message> {
     let now = chrono::Local::now();
     let time_str = format!("{:02}:{:02}", now.hour(), now.minute());
@@ -502,6 +634,16 @@ fn top_bar(
         row(items).align_items(Alignment::Center).into()
     };
 
+    let help = button(
+        text("?").size(11).style(iced_theme::Text::Color(
+            if show_shortcuts { p.accent } else { p.subtext },
+        )),
+    )
+    .padding([0, 8])
+    .height(Length::Fixed(30.0))
+    .style(iced_theme::Button::Custom(Box::new(SettingsBtn { p, active: show_shortcuts })))
+    .on_press(Message::ToggleShortcuts);
+
     let gear = button(
         text("⚙").size(11).style(iced_theme::Text::Color(
             if show_settings { p.accent } else { p.subtext },
@@ -518,6 +660,7 @@ fn top_bar(
                 row(vec![
                     Space::with_width(Length::Fill).into(),
                     make_badge(time_str),
+                    help.into(),
                     gear.into(),
                     Space::with_width(4).into(),
                 ])
@@ -553,13 +696,14 @@ fn top_bar(
     .padding([0, 12])
     .height(Length::Fixed(30.0))
     .style(iced_theme::Button::Custom(Box::new(CloseBtn(p))))
-    .on_press(Message::WindowClose);
+    .on_press(Message::HideToTray);
 
     container(
         row(vec![
             pin.into(),
             drag_zone.into(),
             make_badge(time_str),
+            help.into(),
             gear.into(),
             close.into(),
         ])
@@ -868,6 +1012,7 @@ fn settings_view<'a>(
     short_input: &'a str,
     long_input: &'a str,
     sound_option: SoundOption,
+    autostart: bool,
 ) -> Element<'a, Message> {
     let preset_btn = |preset: TimerPreset, label: &'static str| -> Element<'a, Message> {
         let active = config.preset == preset;
@@ -928,6 +1073,18 @@ fn settings_view<'a>(
         Space::with_width(Length::Fill).into(),
     ])
     .align_items(Alignment::Center);
+
+    let autostart_btn = button(
+        text(if autostart { "✓  Launch at login" } else { "   Launch at login" }).size(11),
+    )
+    .width(Length::Fill)
+    .padding([7, 0])
+    .style(iced_theme::Button::Custom(if autostart {
+        Box::new(AccentBtn(p)) as Box<dyn iced::widget::button::StyleSheet<Style = iced::Theme>>
+    } else {
+        Box::new(GhostBtn(p))
+    }))
+    .on_press(Message::ToggleAutostart);
 
     let mut inner_items: Vec<Element<Message>> = vec![
         row(vec![
@@ -1007,8 +1164,91 @@ fn settings_view<'a>(
         );
     }
 
+    inner_items.push(Space::with_height(14).into());
+    inner_items.push(
+        text("System")
+            .size(10)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into(),
+    );
+    inner_items.push(Space::with_height(6).into());
+    inner_items.push(autostart_btn.into());
+
     container(
         scrollable(column(inner_items).padding([14, 20])).height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(iced_theme::Container::Custom(Box::new(Flat)))
+    .into()
+}
+
+// ── Shortcuts View ────────────────────────────────────────────────────────
+
+fn shortcuts_view(p: Palette) -> Element<'static, Message> {
+    let row_item = move |key: &'static str, desc: &'static str| -> Element<'static, Message> {
+        row(vec![
+            text(key)
+                .size(11)
+                .font(iced::Font::MONOSPACE)
+                .style(iced_theme::Text::Color(p.accent))
+                .width(Length::Fixed(110.0))
+                .into(),
+            text(desc)
+                .size(11)
+                .style(iced_theme::Text::Color(p.subtext))
+                .into(),
+        ])
+        .align_items(Alignment::Center)
+        .into()
+    };
+
+    let section = move |label: &'static str| -> Element<'static, Message> {
+        text(label)
+            .size(10)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into()
+    };
+
+    let items: Vec<Element<Message>> = vec![
+        row(vec![
+            text("shortcuts")
+                .size(13)
+                .style(iced_theme::Text::Color(p.text))
+                .into(),
+            Space::with_width(Length::Fill).into(),
+            button(text("done").size(10))
+                .padding([2, 8])
+                .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
+                .on_press(Message::ToggleShortcuts)
+                .into(),
+        ])
+        .align_items(Alignment::Center)
+        .into(),
+        Space::with_height(12).into(),
+        section("Timer").into(),
+        Space::with_height(6).into(),
+        row_item("Space",   "start / pause"),
+        Space::with_height(4).into(),
+        row_item("R",       "reset timer"),
+        Space::with_height(4).into(),
+        row_item("S",       "skip phase"),
+        Space::with_height(12).into(),
+        section("Navigate").into(),
+        Space::with_height(6).into(),
+        row_item("← →",    "switch tabs"),
+        Space::with_height(4).into(),
+        row_item("Esc",     "close panel"),
+        Space::with_height(4).into(),
+        row_item("?",       "this panel"),
+        Space::with_height(12).into(),
+        section("Global").into(),
+        Space::with_height(6).into(),
+        row_item("Ctrl+Shift+F", "show / hide window"),
+    ];
+
+    container(
+        scrollable(column(items).padding([14, 20])).height(Length::Fill),
     )
     .width(Length::Fill)
     .height(Length::Fill)
@@ -1152,6 +1392,9 @@ fn create_app_icon() -> Option<window::Icon> {
 // ── Entry Point ───────────────────────────────────────────────────────────
 
 fn main() -> iced::Result {
+    platform::setup_tray();
+    platform::setup_hotkey();
+
     let mut fonts: Vec<std::borrow::Cow<'static, [u8]>> = vec![];
     if let Ok(bytes) = std::fs::read("C:\\Windows\\Fonts\\seguisym.ttf") {
         fonts.push(std::borrow::Cow::Owned(bytes));
