@@ -26,7 +26,10 @@ use theme::{
 };
 
 const APP_NAME: &str = "focus";
-const CURRENT_VERSION: &str = "0.1.4";
+const CURRENT_VERSION: &str = "0.1.5";
+const AUTHOR: &str = "Brandon Irving";
+const GITHUB_URL: &str = "https://github.com/brand-ing/study-buddy";
+const DONATE_URL: &str = ""; // set to your donation link when ready
 
 // ── Navigation ────────────────────────────────────────────────────────────
 
@@ -65,7 +68,6 @@ struct App {
     heatmap: Heatmap,
     active_tab: Tab,
     always_on_top: bool,
-    hide_in_ticks: u8,
     hover_left: bool,
     hover_right: bool,
     hovered_heat_date: Option<NaiveDate>,
@@ -77,8 +79,9 @@ struct App {
     editing_task_id: Option<u64>,
     edit_text: String,
     last_task_press: Option<(u64, std::time::Instant)>,
-    // settings
+    // settings / about
     show_settings: bool,
+    show_about: bool,
     custom_work_input: String,
     custom_short_input: String,
     custom_long_input: String,
@@ -146,6 +149,9 @@ enum Message {
     // tray actions
     TrayCheckUpdate,
     TrayPauseResume,
+    TrayAbout,
+    ToggleAbout,
+    OpenUrl(String),
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -169,7 +175,6 @@ impl Application for App {
                 heatmap: s.heatmap,
                 active_tab: Tab::Timer,
                 always_on_top: false,
-                hide_in_ticks: 0,
                 hover_left: false,
                 hover_right: false,
                 hovered_heat_date: None,
@@ -181,6 +186,7 @@ impl Application for App {
                 edit_text: String::new(),
                 last_task_press: None,
                 show_settings: false,
+                show_about: false,
                 custom_work_input: cfg.work_mins.to_string(),
                 custom_short_input: cfg.short_mins.to_string(),
                 custom_long_input: cfg.long_mins.to_string(),
@@ -203,7 +209,7 @@ impl Application for App {
 
     fn subscription(&self) -> Subscription<Message> {
         use std::time::Duration;
-        let needs_tick = self.timer.running || self.hide_in_ticks > 0;
+        let needs_tick = self.timer.running;
         let tick = if needs_tick {
             time::every(Duration::from_secs(1)).map(|_| Message::Tick)
         } else {
@@ -259,6 +265,7 @@ impl Application for App {
                         "quit"         => { tx.send(Message::TrayQuit).await.ok(); }
                         "check_update"  => { tx.send(Message::TrayCheckUpdate).await.ok(); }
                         "pause_resume"  => { tx.send(Message::TrayPauseResume).await.ok(); }
+                        "about"         => { tx.send(Message::TrayAbout).await.ok(); }
                         _ => {}
                     }
                 }
@@ -291,9 +298,6 @@ impl Application for App {
                     platform::notify_work_done();
                     self.heatmap.add(self.timer.config.work_mins);
                     self.persist();
-                }
-                if self.hide_in_ticks > 0 {
-                    self.hide_in_ticks -= 1;
                 }
                 platform::update_tray(self.timer.phase, self.timer.running, self.timer.remaining);
             }
@@ -426,7 +430,6 @@ impl Application for App {
                 return window::change_level(window::Id::MAIN, level);
             }
             Message::MouseMoved(pos) => {
-                if pos.y < 40.0 { self.hide_in_ticks = 6; }
                 if self.drag_task_id.is_some() && !self.tasks.is_empty() {
                     let raw = ((pos.y - 75.0) / 31.0).floor() as isize;
                     self.drag_target_idx =
@@ -434,7 +437,6 @@ impl Application for App {
                 }
             }
             Message::MouseLeft => {
-                self.hide_in_ticks = 0;
                 self.hover_left = false;
                 self.hover_right = false;
                 self.drag_task_id = None;
@@ -512,6 +514,7 @@ impl Application for App {
             Message::KeyEscape => {
                 if self.show_shortcuts { self.show_shortcuts = false; }
                 else if self.show_settings { self.show_settings = false; }
+                else if self.show_about { self.show_about = false; }
             }
             Message::ToggleShortcuts => {
                 self.show_settings = false;
@@ -531,14 +534,29 @@ impl Application for App {
             Message::TrayPauseResume => {
                 return self.update(Message::TimerToggle);
             }
+            Message::TrayAbout => {
+                platform::show_window();
+                self.show_about = true;
+                self.show_settings = false;
+                self.show_shortcuts = false;
+                self.show_changelog = false;
+            }
+            Message::ToggleAbout => {
+                self.show_about = !self.show_about;
+                if self.show_about {
+                    self.show_settings = false;
+                    self.show_shortcuts = false;
+                }
+            }
+            Message::OpenUrl(url) => {
+                platform::open_url(&url);
+            }
         }
         Command::none()
     }
 
     fn view(&self) -> Element<Message> {
         let p = self.tod.palette();
-        let show_controls = self.hide_in_ticks > 0;
-
         let session_color: Option<Color> = if self.timer.running {
             Some(if self.timer.phase == Phase::Work { p.accent } else { p.success })
         } else {
@@ -547,6 +565,8 @@ impl Application for App {
 
         let content: Element<Message> = if self.show_changelog {
             changelog_view(p)
+        } else if self.show_about {
+            about_view(p)
         } else if self.show_shortcuts {
             shortcuts_view(p)
         } else if self.show_settings {
@@ -593,9 +613,9 @@ impl Application for App {
         };
 
         let body = column(vec![
-            top_bar(p, show_controls, self.always_on_top, session_color, self.show_settings, self.show_shortcuts),
+            top_bar(p, self.always_on_top, session_color, self.show_settings, self.show_shortcuts),
             content,
-            page_dots(p, self.active_tab, self.show_settings || self.show_shortcuts || self.show_changelog),
+            page_dots(p, self.active_tab, self.show_settings || self.show_shortcuts || self.show_changelog || self.show_about),
         ])
         .height(Length::Fill);
 
@@ -632,7 +652,6 @@ impl App {
 
 fn top_bar(
     p: Palette,
-    show_controls: bool,
     always_on_top: bool,
     session_color: Option<Color>,
     show_settings: bool,
@@ -641,31 +660,34 @@ fn top_bar(
     let now = chrono::Local::now();
     let time_str = format!("{:02}:{:02}", now.hour(), now.minute());
 
-    let make_badge = move |time: String| -> Element<'static, Message> {
-        let mut items: Vec<Element<Message>> = vec![];
-        if let Some(color) = session_color {
-            items.push(
-                container(Space::new(Length::Fixed(6.0), Length::Fixed(6.0)))
-                    .style(iced_theme::Container::Custom(Box::new(DotCell(color))))
-                    .into(),
-            );
-            items.push(Space::with_width(5).into());
-        }
-        items.push(
-            text(APP_NAME)
-                .size(10)
-                .style(iced_theme::Text::Color(p.accent))
+    let mut badge_items: Vec<Element<Message>> = vec![];
+    if let Some(color) = session_color {
+        badge_items.push(
+            container(Space::new(Length::Fixed(6.0), Length::Fixed(6.0)))
+                .style(iced_theme::Container::Custom(Box::new(DotCell(color))))
                 .into(),
         );
-        items.push(Space::with_width(6).into());
-        items.push(
-            text(time)
-                .size(10)
-                .style(iced_theme::Text::Color(p.subtext))
-                .into(),
-        );
-        row(items).align_items(Alignment::Center).into()
-    };
+        badge_items.push(Space::with_width(5).into());
+    }
+    badge_items.push(text(APP_NAME).size(10).style(iced_theme::Text::Color(p.accent)).into());
+    badge_items.push(Space::with_width(6).into());
+    badge_items.push(text(time_str).size(10).style(iced_theme::Text::Color(p.subtext)).into());
+    let badge = row(badge_items).align_items(Alignment::Center);
+
+    let pin = button(
+        text("⊤").size(11).style(iced_theme::Text::Color(
+            if always_on_top { p.accent } else { p.subtext },
+        )),
+    )
+    .padding([0, 10])
+    .height(Length::Fixed(30.0))
+    .style(iced_theme::Button::Custom(Box::new(PinBtn { p, active: always_on_top })))
+    .on_press(Message::ToggleAlwaysOnTop);
+
+    let drag_zone = mouse_area(
+        container(Space::new(Length::Fill, Length::Fixed(30.0))),
+    )
+    .on_press(Message::TitleBarDrag);
 
     let help = button(
         text("?").size(11).style(iced_theme::Text::Color(
@@ -687,42 +709,6 @@ fn top_bar(
     .style(iced_theme::Button::Custom(Box::new(SettingsBtn { p, active: show_settings })))
     .on_press(Message::ToggleSettings);
 
-    if !show_controls {
-        return mouse_area(
-            container(
-                row(vec![
-                    Space::with_width(Length::Fill).into(),
-                    make_badge(time_str),
-                    help.into(),
-                    gear.into(),
-                    Space::with_width(4).into(),
-                ])
-                .align_items(Alignment::Center)
-                .height(Length::Fixed(30.0)),
-            )
-            .width(Length::Fill),
-        )
-        .on_press(Message::TitleBarDrag)
-        .into();
-    }
-
-    let pin = button(
-        text("⊤")
-            .size(11)
-            .style(iced_theme::Text::Color(
-                if always_on_top { p.accent } else { p.subtext },
-            )),
-    )
-    .padding([0, 10])
-    .height(Length::Fixed(30.0))
-    .style(iced_theme::Button::Custom(Box::new(PinBtn { p, active: always_on_top })))
-    .on_press(Message::ToggleAlwaysOnTop);
-
-    let drag_zone = mouse_area(
-        container(Space::new(Length::Fill, Length::Fixed(30.0))),
-    )
-    .on_press(Message::TitleBarDrag);
-
     let close = button(
         text("✕").size(9).style(iced_theme::Text::Color(p.subtext)),
     )
@@ -735,7 +721,7 @@ fn top_bar(
         row(vec![
             pin.into(),
             drag_zone.into(),
-            make_badge(time_str),
+            badge.into(),
             help.into(),
             gear.into(),
             close.into(),
@@ -1206,6 +1192,15 @@ fn settings_view<'a>(
     );
     inner_items.push(Space::with_height(6).into());
     inner_items.push(autostart_btn.into());
+    inner_items.push(Space::with_height(20).into());
+    inner_items.push(
+        button(text("About focus").size(11))
+            .width(Length::Fill)
+            .padding([7, 0])
+            .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
+            .on_press(Message::ToggleAbout)
+            .into(),
+    );
 
     container(
         scrollable(column(inner_items).padding([14, 20])).height(Length::Fill),
@@ -1279,6 +1274,77 @@ fn shortcuts_view(p: Palette) -> Element<'static, Message> {
         Space::with_height(6).into(),
         row_item("Ctrl+Shift+F", "show / hide window"),
     ];
+
+    container(
+        scrollable(column(items).padding([14, 20])).height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(iced_theme::Container::Custom(Box::new(Flat)))
+    .into()
+}
+
+// ── About View ────────────────────────────────────────────────────────────
+
+fn about_view(p: Palette) -> Element<'static, Message> {
+    let link_btn = move |label: &'static str, url: &'static str| -> Element<'static, Message> {
+        button(text(label).size(11).style(iced_theme::Text::Color(p.accent)))
+            .padding([5, 0])
+            .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
+            .on_press(Message::OpenUrl(url.to_string()))
+            .into()
+    };
+
+    let mut items: Vec<Element<Message>> = vec![
+        row(vec![
+            text("about")
+                .size(13)
+                .style(iced_theme::Text::Color(p.text))
+                .into(),
+            Space::with_width(Length::Fill).into(),
+            button(text("done").size(10))
+                .padding([2, 8])
+                .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
+                .on_press(Message::ToggleAbout)
+                .into(),
+        ])
+        .align_items(Alignment::Center)
+        .into(),
+        Space::with_height(20).into(),
+        text(APP_NAME)
+            .size(26)
+            .style(iced_theme::Text::Color(p.accent))
+            .into(),
+        Space::with_height(4).into(),
+        text(format!("v{}", CURRENT_VERSION))
+            .size(11)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into(),
+        Space::with_height(6).into(),
+        text(format!("by {}", AUTHOR))
+            .size(11)
+            .style(iced_theme::Text::Color(p.text))
+            .into(),
+        Space::with_height(22).into(),
+        text("Source")
+            .size(10)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into(),
+        Space::with_height(4).into(),
+        link_btn("github.com/brand-ing/study-buddy  ↗", GITHUB_URL),
+    ];
+
+    if !DONATE_URL.is_empty() {
+        items.push(Space::with_height(16).into());
+        items.push(
+            text("Support")
+                .size(10)
+                .style(iced_theme::Text::Color(p.subtext))
+                .into(),
+        );
+        items.push(Space::with_height(4).into());
+        items.push(link_btn("Buy me a coffee  ↗", DONATE_URL));
+    }
 
     container(
         scrollable(column(items).padding([14, 20])).height(Length::Fill),

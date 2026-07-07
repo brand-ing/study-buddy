@@ -50,10 +50,11 @@ pub fn setup_tray() {
     let menu     = tray_icon::menu::Menu::new();
     let quit_i   = tray_icon::menu::MenuItem::with_id("quit",         "Quit",             true, None);
     let update_i = tray_icon::menu::MenuItem::with_id("check_update", "Check for update", true, None);
+    let about_i  = tray_icon::menu::MenuItem::with_id("about",        "About focus",      true, None);
     let pause_i  = tray_icon::menu::MenuItem::with_id("pause_resume", "Resume timer",     true, None);
     let sep      = tray_icon::menu::PredefinedMenuItem::separator();
     let show_i   = tray_icon::menu::MenuItem::with_id("show",         "Show focus",       true, None);
-    let _ = menu.append_items(&[&quit_i, &update_i, &sep, &pause_i, &show_i]);
+    let _ = menu.append_items(&[&quit_i, &update_i, &about_i, &sep, &pause_i, &show_i]);
 
     let pause_leaked: &'static tray_icon::menu::MenuItem = Box::leak(Box::new(pause_i));
     PAUSE_ITEM_PTR.store(pause_leaked as *const _ as *mut _, Ordering::Relaxed);
@@ -148,6 +149,18 @@ fn do_toast(title: &str, body: &str, long: bool) {
         .text1(body)
         .duration(dur)
         .show();
+}
+
+pub fn open_url(url: &str) {
+    let url = url.to_owned();
+    std::thread::spawn(move || {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+    });
 }
 
 pub fn notify_work_done() {
