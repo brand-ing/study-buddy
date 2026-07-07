@@ -141,14 +141,17 @@ pub fn show_window() {
 
 // ── Notifications ─────────────────────────────────────────────────────────
 
+fn do_toast(title: &str, body: &str, long: bool) {
+    let dur = if long { winrt_notification::Duration::Long } else { winrt_notification::Duration::Short };
+    let _ = winrt_notification::Toast::new(winrt_notification::Toast::POWERSHELL_APP_ID)
+        .title(title)
+        .text1(body)
+        .duration(dur)
+        .show();
+}
+
 pub fn notify_work_done() {
-    std::thread::spawn(|| {
-        let _ = winrt_notification::Toast::new(winrt_notification::Toast::POWERSHELL_APP_ID)
-            .title("focus  ·  session complete")
-            .text1("time for a break")
-            .duration(winrt_notification::Duration::Short)
-            .show();
-    });
+    std::thread::spawn(|| do_toast("focus  ·  session complete", "time for a break", false));
 }
 
 // ── Autostart ─────────────────────────────────────────────────────────────
@@ -158,68 +161,6 @@ pub fn get_autostart() -> bool {
     hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")
         .and_then(|k| k.get_value::<String, _>("focus"))
         .is_ok()
-}
-
-// ── Update check ──────────────────────────────────────────────────────────
-
-pub fn check_for_update(current_version: &str) {
-    let current = current_version.to_owned();
-    std::thread::spawn(move || {
-        const API: &str =
-            "https://api.github.com/repos/brand-ing/study-buddy/releases/latest";
-
-        let result = ureq::get(API)
-            .set("User-Agent", "focus-app")
-            .call();
-
-        let toast = |title: &str, body: &str, long: bool| {
-            let dur = if long {
-                winrt_notification::Duration::Long
-            } else {
-                winrt_notification::Duration::Short
-            };
-            let _ = winrt_notification::Toast::new(winrt_notification::Toast::POWERSHELL_APP_ID)
-                .title(title)
-                .text1(body)
-                .duration(dur)
-                .show();
-        };
-
-        match result {
-            Ok(resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                let json: serde_json::Value =
-                    serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
-                let latest = json["tag_name"]
-                    .as_str()
-                    .unwrap_or("")
-                    .trim_start_matches('v');
-
-                if latest.is_empty() {
-                    toast("focus  ·  update check failed", "no release found on github", false);
-                } else if latest == current.as_str() {
-                    toast(
-                        "focus  ·  you're up to date",
-                        &format!("version {} is the latest", current),
-                        false,
-                    );
-                } else {
-                    toast(
-                        &format!("focus  ·  {} available", latest),
-                        "visit github.com/brand-ing/study-buddy to download",
-                        true,
-                    );
-                }
-            }
-            Err(_) => {
-                toast(
-                    "focus  ·  update check failed",
-                    "couldn't reach github — check your connection",
-                    false,
-                );
-            }
-        }
-    });
 }
 
 pub fn set_autostart(enable: bool) {
@@ -232,4 +173,128 @@ pub fn set_autostart(enable: bool) {
     ) else { return };
     if enable { let _ = run.set_value("focus", &exe); }
     else      { let _ = run.delete_value("focus"); }
+}
+
+// ── Update check & auto-install ───────────────────────────────────────────
+
+pub fn check_for_update(current_version: &str) {
+    let current = current_version.to_owned();
+    std::thread::spawn(move || {
+        const API: &str =
+            "https://api.github.com/repos/brand-ing/study-buddy/releases/latest";
+
+        match ureq::get(API).set("User-Agent", "focus-app").call() {
+            Ok(resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                let json: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                let latest = json["tag_name"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim_start_matches('v');
+
+                if latest.is_empty() {
+                    do_toast("focus  ·  update check failed", "no release found on github", false);
+                } else if latest == current.as_str() {
+                    do_toast(
+                        "focus  ·  you're up to date",
+                        &format!("version {} is the latest", current),
+                        false,
+                    );
+                } else {
+                    let url = format!(
+                        "https://github.com/brand-ing/study-buddy/releases/download/v{}/focus.exe",
+                        latest
+                    );
+                    download_and_stage_update(url, latest.to_owned());
+                }
+            }
+            Err(_) => {
+                do_toast(
+                    "focus  ·  update check failed",
+                    "couldn't reach github — check your connection",
+                    false,
+                );
+            }
+        }
+    });
+}
+
+fn download_and_stage_update(url: String, version: String) {
+    do_toast(
+        &format!("focus  ·  {} available", version),
+        "downloading in the background…",
+        false,
+    );
+
+    let temp_new = std::env::temp_dir().join("focus_update.exe");
+
+    let resp = match ureq::get(&url).set("User-Agent", "focus-app").call() {
+        Ok(r) => r,
+        Err(_) => {
+            do_toast("focus  ·  update failed", "download failed — check your connection", false);
+            return;
+        }
+    };
+
+    let mut out = match std::fs::File::create(&temp_new) {
+        Ok(f) => f,
+        Err(_) => {
+            do_toast("focus  ·  update failed", "could not write to temp directory", false);
+            return;
+        }
+    };
+
+    if std::io::copy(&mut resp.into_reader(), &mut out).is_err() {
+        do_toast("focus  ·  update failed", "download incomplete", false);
+        return;
+    }
+    drop(out);
+
+    let Ok(current_exe) = std::env::current_exe() else {
+        do_toast("focus  ·  update failed", "could not locate executable", false);
+        return;
+    };
+
+    // Write a batch script that waits for this process to exit, swaps the
+    // binary in place, and relaunches. Windows won't let us overwrite a
+    // running exe, so the wait loop is necessary.
+    let bat = std::env::temp_dir().join("focus_update.bat");
+    let pid = std::process::id();
+    let bat_content = format!(
+        "@echo off\r\n\
+         :wait\r\n\
+         tasklist /FI \"PID eq {pid}\" 2>nul | find /I \"focus.exe\" >nul\r\n\
+         if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto :wait)\r\n\
+         move /Y \"{src}\" \"{dst}\"\r\n\
+         start \"\" \"{dst}\"\r\n\
+         del \"%~f0\"\r\n",
+        pid = pid,
+        src = temp_new.display(),
+        dst = current_exe.display(),
+    );
+
+    if std::fs::write(&bat, bat_content).is_err() {
+        do_toast("focus  ·  update failed", "could not create updater script", false);
+        return;
+    }
+
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    if std::process::Command::new("cmd")
+        .arg("/C")
+        .arg(&bat)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .is_err()
+    {
+        do_toast("focus  ·  update failed", "could not launch updater", false);
+        return;
+    }
+
+    do_toast(
+        &format!("focus  ·  {} ready", version),
+        "update will install when you close the app",
+        true,
+    );
 }

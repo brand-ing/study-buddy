@@ -26,7 +26,7 @@ use theme::{
 };
 
 const APP_NAME: &str = "focus";
-const CURRENT_VERSION: &str = "0.1.2";
+const CURRENT_VERSION: &str = "0.1.3";
 
 // ── Navigation ────────────────────────────────────────────────────────────
 
@@ -1323,6 +1323,12 @@ fn changelog_view(p: Palette) -> Element<'static, Message> {
         ])
         .into(),
         Space::with_height(14).into(),
+        heading("Auto-update"),
+        Space::with_height(5).into(),
+        bullet("Check for update now downloads and stages the new version automatically"),
+        Space::with_height(3).into(),
+        bullet("Update installs silently when you close the app — no session disruption"),
+        Space::with_height(12).into(),
         heading("Tray timer"),
         Space::with_height(5).into(),
         bullet("Live countdown shown in tray tooltip — no need to open the window"),
