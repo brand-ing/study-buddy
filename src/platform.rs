@@ -1,44 +1,62 @@
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicPtr, Ordering};
+use crate::data::Phase;
 
 static SHOW_HOTKEY_ID: OnceLock<u32> = OnceLock::new();
+static TRAY_PTR: AtomicPtr<tray_icon::TrayIcon> = AtomicPtr::new(std::ptr::null_mut());
+static PAUSE_ITEM_PTR: AtomicPtr<tray_icon::menu::MenuItem> = AtomicPtr::new(std::ptr::null_mut());
 
 // ── Tray ──────────────────────────────────────────────────────────────────
 
-pub fn setup_tray() {
-    let icon = {
-        const S: u32 = 32;
-        let n = S as usize;
-        let mut rgba = vec![0u8; n * n * 4];
-        let c = 15.5_f32;
-        for y in 0..n {
-            for x in 0..n {
-                let dx = x as f32 - c;
-                let dy = y as f32 - c;
-                let r = (dx * dx + dy * dy).sqrt();
-                let i = (y * n + x) * 4;
-                if r > 14.5 { continue; }
-                if r >= 11.0 {
-                    rgba[i] = 96; rgba[i+1] = 165; rgba[i+2] = 250; rgba[i+3] = 255;
-                } else {
-                    rgba[i] = 15; rgba[i+1] = 17; rgba[i+2] = 23; rgba[i+3] = 255;
-                    let hand_up    = dx.abs() < 1.2 && dy < 0.0 && dy > -8.5;
-                    let hand_right = dy.abs() < 1.2 && dx > 0.0 && dx < 6.5;
-                    if hand_up || hand_right || r < 1.8 {
-                        rgba[i] = 200; rgba[i+1] = 225; rgba[i+2] = 245; rgba[i+3] = 255;
-                    }
+fn make_icon_rgba(phase: Phase, running: bool) -> Vec<u8> {
+    const S: u32 = 32;
+    let n = S as usize;
+    let mut rgba = vec![0u8; n * n * 4];
+    let (ring_r, ring_g, ring_b): (u8, u8, u8) = if !running {
+        (80, 80, 90)
+    } else {
+        match phase {
+            Phase::Work => (74, 222, 128),
+            _ => (96, 165, 250),
+        }
+    };
+    let c = 15.5_f32;
+    for y in 0..n {
+        for x in 0..n {
+            let dx = x as f32 - c;
+            let dy = y as f32 - c;
+            let r = (dx * dx + dy * dy).sqrt();
+            let i = (y * n + x) * 4;
+            if r > 14.5 { continue; }
+            if r >= 11.0 {
+                rgba[i] = ring_r; rgba[i+1] = ring_g; rgba[i+2] = ring_b; rgba[i+3] = 255;
+            } else {
+                rgba[i] = 15; rgba[i+1] = 17; rgba[i+2] = 23; rgba[i+3] = 255;
+                let hand_up    = dx.abs() < 1.2 && dy < 0.0 && dy > -8.5;
+                let hand_right = dy.abs() < 1.2 && dx > 0.0 && dx < 6.5;
+                if hand_up || hand_right || r < 1.8 {
+                    rgba[i] = 200; rgba[i+1] = 225; rgba[i+2] = 245; rgba[i+3] = 255;
                 }
             }
         }
-        tray_icon::Icon::from_rgba(rgba, S, S).expect("tray icon rgba")
-    };
+    }
+    rgba
+}
+
+pub fn setup_tray() {
+    let rgba = make_icon_rgba(Phase::Work, false);
+    let icon = tray_icon::Icon::from_rgba(rgba, 32, 32).expect("tray icon rgba");
 
     let menu     = tray_icon::menu::Menu::new();
     let quit_i   = tray_icon::menu::MenuItem::with_id("quit",         "Quit",             true, None);
     let update_i = tray_icon::menu::MenuItem::with_id("check_update", "Check for update", true, None);
+    let pause_i  = tray_icon::menu::MenuItem::with_id("pause_resume", "Resume timer",     true, None);
     let sep      = tray_icon::menu::PredefinedMenuItem::separator();
     let show_i   = tray_icon::menu::MenuItem::with_id("show",         "Show focus",       true, None);
-    // Quit at top so it's never clipped by the taskbar; Show at bottom near the tray icon
-    let _ = menu.append_items(&[&quit_i, &update_i, &sep, &show_i]);
+    let _ = menu.append_items(&[&quit_i, &update_i, &sep, &pause_i, &show_i]);
+
+    let pause_leaked: &'static tray_icon::menu::MenuItem = Box::leak(Box::new(pause_i));
+    PAUSE_ITEM_PTR.store(pause_leaked as *const _ as *mut _, Ordering::Relaxed);
 
     let tray = tray_icon::TrayIconBuilder::new()
         .with_tooltip("focus")
@@ -47,7 +65,35 @@ pub fn setup_tray() {
         .build()
         .expect("tray icon build");
 
-    Box::leak(Box::new(tray));
+    let tray_leaked: &'static tray_icon::TrayIcon = Box::leak(Box::new(tray));
+    TRAY_PTR.store(tray_leaked as *const _ as *mut _, Ordering::Relaxed);
+}
+
+pub fn update_tray(phase: Phase, running: bool, remaining: u32) {
+    let tray_ptr = TRAY_PTR.load(Ordering::Relaxed);
+    if tray_ptr.is_null() { return; }
+    let tray = unsafe { &*tray_ptr };
+
+    let rgba = make_icon_rgba(phase, running);
+    if let Ok(icon) = tray_icon::Icon::from_rgba(rgba, 32, 32) {
+        let _ = tray.set_icon(Some(icon));
+    }
+
+    let tooltip = if !running {
+        "focus · idle".to_string()
+    } else if phase == Phase::OpenBreak {
+        "focus · open break".to_string()
+    } else {
+        let label = if phase == Phase::Work { "work" } else { "break" };
+        format!("focus · {:02}:{:02} · {}", remaining / 60, remaining % 60, label)
+    };
+    let _ = tray.set_tooltip(Some(&tooltip));
+
+    let pause_ptr = PAUSE_ITEM_PTR.load(Ordering::Relaxed);
+    if !pause_ptr.is_null() {
+        let item = unsafe { &*pause_ptr };
+        item.set_text(if running { "Pause timer" } else { "Resume timer" });
+    }
 }
 
 // ── Global hotkey ─────────────────────────────────────────────────────────

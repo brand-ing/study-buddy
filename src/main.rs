@@ -26,7 +26,7 @@ use theme::{
 };
 
 const APP_NAME: &str = "focus";
-const CURRENT_VERSION: &str = "0.1.1";
+const CURRENT_VERSION: &str = "0.1.2";
 
 // ── Navigation ────────────────────────────────────────────────────────────
 
@@ -145,6 +145,7 @@ enum Message {
     DismissChangelog,
     // tray actions
     TrayCheckUpdate,
+    TrayPauseResume,
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -256,7 +257,8 @@ impl Application for App {
                     match ev.id.0.as_str() {
                         "show"         => { tx.send(Message::TrayShow).await.ok(); }
                         "quit"         => { tx.send(Message::TrayQuit).await.ok(); }
-                        "check_update" => { tx.send(Message::TrayCheckUpdate).await.ok(); }
+                        "check_update"  => { tx.send(Message::TrayCheckUpdate).await.ok(); }
+                        "pause_resume"  => { tx.send(Message::TrayPauseResume).await.ok(); }
                         _ => {}
                     }
                 }
@@ -293,6 +295,7 @@ impl Application for App {
                 if self.hide_in_ticks > 0 {
                     self.hide_in_ticks -= 1;
                 }
+                platform::update_tray(self.timer.phase, self.timer.running, self.timer.remaining);
             }
             Message::TimerToggle => {
                 self.click();
@@ -302,9 +305,18 @@ impl Application for App {
                 } else {
                     self.timer.running = !self.timer.running;
                 }
+                platform::update_tray(self.timer.phase, self.timer.running, self.timer.remaining);
             }
-            Message::TimerReset => { self.click(); self.timer.reset(); }
-            Message::TimerSkip  => { self.click(); self.timer.skip(); }
+            Message::TimerReset => {
+                self.click();
+                self.timer.reset();
+                platform::update_tray(self.timer.phase, self.timer.running, self.timer.remaining);
+            }
+            Message::TimerSkip => {
+                self.click();
+                self.timer.skip();
+                platform::update_tray(self.timer.phase, self.timer.running, self.timer.remaining);
+            }
             Message::TaskInputChanged(s) => self.task_input = s,
             Message::TaskAdd => {
                 let t = self.task_input.trim().to_string();
@@ -515,6 +527,9 @@ impl Application for App {
             }
             Message::TrayCheckUpdate => {
                 platform::check_for_update(CURRENT_VERSION);
+            }
+            Message::TrayPauseResume => {
+                return self.update(Message::TimerToggle);
             }
         }
         Command::none()
@@ -1308,6 +1323,14 @@ fn changelog_view(p: Palette) -> Element<'static, Message> {
         ])
         .into(),
         Space::with_height(14).into(),
+        heading("Tray timer"),
+        Space::with_height(5).into(),
+        bullet("Live countdown shown in tray tooltip — no need to open the window"),
+        Space::with_height(3).into(),
+        bullet("Icon ring color: green = focus, blue = break, grey = idle"),
+        Space::with_height(3).into(),
+        bullet("Pause / Resume from the right-click tray menu"),
+        Space::with_height(12).into(),
         heading("System"),
         Space::with_height(5).into(),
         bullet("Close to tray — app keeps running in the background"),
@@ -1315,16 +1338,6 @@ fn changelog_view(p: Palette) -> Element<'static, Message> {
         bullet("Ctrl+Shift+F — show or hide from anywhere"),
         Space::with_height(3).into(),
         bullet("Launch at login — toggle in Settings"),
-        Space::with_height(12).into(),
-        heading("Notifications"),
-        Space::with_height(5).into(),
-        bullet("Desktop alert when a work session ends"),
-        Space::with_height(12).into(),
-        heading("Shortcuts"),
-        Space::with_height(5).into(),
-        bullet("Space / R / S / ← → timer controls"),
-        Space::with_height(3).into(),
-        bullet("? button opens the shortcut reference panel"),
         Space::with_height(12).into(),
         heading("Updates"),
         Space::with_height(5).into(),
