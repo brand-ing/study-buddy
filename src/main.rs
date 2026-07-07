@@ -26,7 +26,7 @@ use theme::{
 };
 
 const APP_NAME: &str = "focus";
-const CURRENT_VERSION: &str = "0.1.3";
+const CURRENT_VERSION: &str = "0.1.4";
 
 // ── Navigation ────────────────────────────────────────────────────────────
 

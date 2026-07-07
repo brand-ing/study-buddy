@@ -177,6 +177,14 @@ pub fn set_autostart(enable: bool) {
 
 // ── Update check & auto-install ───────────────────────────────────────────
 
+fn parse_version(v: &str) -> (u32, u32, u32) {
+    let mut p = v.splitn(3, '.');
+    let major = p.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor = p.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let patch = p.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (major, minor, patch)
+}
+
 pub fn check_for_update(current_version: &str) {
     let current = current_version.to_owned();
     std::thread::spawn(move || {
@@ -195,7 +203,7 @@ pub fn check_for_update(current_version: &str) {
 
                 if latest.is_empty() {
                     do_toast("focus  ·  update check failed", "no release found on github", false);
-                } else if latest == current.as_str() {
+                } else if parse_version(latest) <= parse_version(&current) {
                     do_toast(
                         "focus  ·  you're up to date",
                         &format!("version {} is the latest", current),
