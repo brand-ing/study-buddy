@@ -1,6 +1,28 @@
-use std::sync::OnceLock;
+use std::sync::{OnceLock, Mutex};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use crate::data::Phase;
+
+// ── In-app update events ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum UpdateInfo {
+    Checking,
+    UpToDate,
+    Available { version: String, url: String },
+    Downloading,
+    Ready { version: String },
+    Failed(String),
+}
+
+static PENDING_UPDATE: Mutex<Option<UpdateInfo>> = Mutex::new(None);
+
+fn push_update(info: UpdateInfo) {
+    if let Ok(mut g) = PENDING_UPDATE.lock() { *g = Some(info); }
+}
+
+pub fn poll_update() -> Option<UpdateInfo> {
+    PENDING_UPDATE.lock().ok()?.take()
+}
 
 static SHOW_HOTKEY_ID: OnceLock<u32> = OnceLock::new();
 static TRAY_PTR: AtomicPtr<tray_icon::TrayIcon> = AtomicPtr::new(std::ptr::null_mut());
@@ -198,7 +220,7 @@ pub fn set_autostart(enable: bool) {
     else      { let _ = run.delete_value("focus"); }
 }
 
-// ── Update check & auto-install ───────────────────────────────────────────
+// ── Update check & install ────────────────────────────────────────────────
 
 fn parse_version(v: &str) -> (u32, u32, u32) {
     let mut p = v.splitn(3, '.');
@@ -213,7 +235,6 @@ pub fn check_for_update(current_version: &str) {
     std::thread::spawn(move || {
         const API: &str =
             "https://api.github.com/repos/brand-ing/study-buddy/releases/latest";
-
         match ureq::get(API).set("User-Agent", "focus-app").call() {
             Ok(resp) => {
                 let body = resp.into_string().unwrap_or_default();
@@ -223,109 +244,92 @@ pub fn check_for_update(current_version: &str) {
                     .as_str()
                     .unwrap_or("")
                     .trim_start_matches('v');
-
                 if latest.is_empty() {
-                    do_toast("focus  ·  update check failed", "no release found on github", false);
+                    push_update(UpdateInfo::Failed("no release found on GitHub".into()));
                 } else if parse_version(latest) <= parse_version(&current) {
-                    do_toast(
-                        "focus  ·  you're up to date",
-                        &format!("version {} is the latest", current),
-                        false,
-                    );
+                    push_update(UpdateInfo::UpToDate);
                 } else {
                     let url = format!(
                         "https://github.com/brand-ing/study-buddy/releases/download/v{}/focus.exe",
                         latest
                     );
-                    download_and_stage_update(url, latest.to_owned());
+                    push_update(UpdateInfo::Available { version: latest.to_owned(), url });
                 }
             }
-            Err(_) => {
-                do_toast(
-                    "focus  ·  update check failed",
-                    "couldn't reach github — check your connection",
-                    false,
-                );
-            }
+            Err(_) => push_update(UpdateInfo::Failed(
+                "couldn't reach GitHub — check your connection".into(),
+            )),
         }
     });
 }
 
-fn download_and_stage_update(url: String, version: String) {
-    do_toast(
-        &format!("focus  ·  {} available", version),
-        "downloading in the background…",
-        false,
-    );
+// Called when the user confirms they want to download the update.
+pub fn trigger_download(url: String, version: String) {
+    push_update(UpdateInfo::Downloading);
+    std::thread::spawn(move || {
+        let temp_new = std::env::temp_dir().join("focus_update.exe");
 
-    let temp_new = std::env::temp_dir().join("focus_update.exe");
+        let resp = match ureq::get(&url).set("User-Agent", "focus-app").call() {
+            Ok(r) => r,
+            Err(_) => {
+                push_update(UpdateInfo::Failed("download failed — check your connection".into()));
+                return;
+            }
+        };
 
-    let resp = match ureq::get(&url).set("User-Agent", "focus-app").call() {
-        Ok(r) => r,
-        Err(_) => {
-            do_toast("focus  ·  update failed", "download failed — check your connection", false);
+        let mut out = match std::fs::File::create(&temp_new) {
+            Ok(f) => f,
+            Err(_) => {
+                push_update(UpdateInfo::Failed("could not write to temp directory".into()));
+                return;
+            }
+        };
+
+        if std::io::copy(&mut resp.into_reader(), &mut out).is_err() {
+            push_update(UpdateInfo::Failed("download incomplete".into()));
             return;
         }
-    };
+        drop(out);
 
-    let mut out = match std::fs::File::create(&temp_new) {
-        Ok(f) => f,
-        Err(_) => {
-            do_toast("focus  ·  update failed", "could not write to temp directory", false);
+        let Ok(current_exe) = std::env::current_exe() else {
+            push_update(UpdateInfo::Failed("could not locate executable".into()));
+            return;
+        };
+
+        // Batch script waits for this process to exit, swaps the binary, relaunches.
+        let bat = std::env::temp_dir().join("focus_update.bat");
+        let pid = std::process::id();
+        let bat_content = format!(
+            "@echo off\r\n\
+             :wait\r\n\
+             tasklist /FI \"PID eq {pid}\" 2>nul | find /I \"focus.exe\" >nul\r\n\
+             if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto :wait)\r\n\
+             move /Y \"{src}\" \"{dst}\"\r\n\
+             start \"\" \"{dst}\"\r\n\
+             del \"%~f0\"\r\n",
+            pid = pid,
+            src = temp_new.display(),
+            dst = current_exe.display(),
+        );
+
+        if std::fs::write(&bat, bat_content).is_err() {
+            push_update(UpdateInfo::Failed("could not create updater script".into()));
             return;
         }
-    };
 
-    if std::io::copy(&mut resp.into_reader(), &mut out).is_err() {
-        do_toast("focus  ·  update failed", "download incomplete", false);
-        return;
-    }
-    drop(out);
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        if std::process::Command::new("cmd")
+            .arg("/C")
+            .arg(&bat)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .is_err()
+        {
+            push_update(UpdateInfo::Failed("could not launch updater".into()));
+            return;
+        }
 
-    let Ok(current_exe) = std::env::current_exe() else {
-        do_toast("focus  ·  update failed", "could not locate executable", false);
-        return;
-    };
-
-    // Write a batch script that waits for this process to exit, swaps the
-    // binary in place, and relaunches. Windows won't let us overwrite a
-    // running exe, so the wait loop is necessary.
-    let bat = std::env::temp_dir().join("focus_update.bat");
-    let pid = std::process::id();
-    let bat_content = format!(
-        "@echo off\r\n\
-         :wait\r\n\
-         tasklist /FI \"PID eq {pid}\" 2>nul | find /I \"focus.exe\" >nul\r\n\
-         if not errorlevel 1 (timeout /t 1 /nobreak >nul & goto :wait)\r\n\
-         move /Y \"{src}\" \"{dst}\"\r\n\
-         start \"\" \"{dst}\"\r\n\
-         del \"%~f0\"\r\n",
-        pid = pid,
-        src = temp_new.display(),
-        dst = current_exe.display(),
-    );
-
-    if std::fs::write(&bat, bat_content).is_err() {
-        do_toast("focus  ·  update failed", "could not create updater script", false);
-        return;
-    }
-
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    if std::process::Command::new("cmd")
-        .arg("/C")
-        .arg(&bat)
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .is_err()
-    {
-        do_toast("focus  ·  update failed", "could not launch updater", false);
-        return;
-    }
-
-    do_toast(
-        &format!("focus  ·  {} ready", version),
-        "update will install when you close the app",
-        true,
-    );
+        push_update(UpdateInfo::Ready { version });
+    });
 }

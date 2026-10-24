@@ -27,7 +27,7 @@ use theme::{
 };
 
 const APP_NAME: &str = "focus";
-const CURRENT_VERSION: &str = "0.1.5";
+const CURRENT_VERSION: &str = "0.1.7";
 const AUTHOR: &str = "Brandon Irving";
 const GITHUB_URL: &str = "https://github.com/brand-ing/study-buddy";
 const DONATE_URL: &str = ""; // set to your donation link when ready
@@ -95,6 +95,8 @@ struct App {
     show_changelog: bool,
     // task dock panel (tray popup)
     task_dock_mode: bool,
+    // in-app update panel
+    update_panel: Option<platform::UpdateInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +161,10 @@ enum Message {
     ToggleAbout,
     TaskDockClose,
     OpenUrl(String),
+    // update panel
+    UpdateCheckResult(platform::UpdateInfo),
+    UpdateConfirmDownload { version: String, url: String },
+    DismissUpdatePanel,
 }
 
 // ── Application ───────────────────────────────────────────────────────────
@@ -202,6 +208,7 @@ impl Application for App {
                 autostart: platform::get_autostart(),
                 show_changelog: s.last_seen_version != CURRENT_VERSION,
                 task_dock_mode: false,
+                update_panel: None,
             },
             Command::none(),
         )
@@ -279,6 +286,9 @@ impl Application for App {
                         "show_tasks"    => { tx.send(Message::TrayShowTasks).await.ok(); }
                         _ => {}
                     }
+                }
+                if let Some(update) = platform::poll_update() {
+                    tx.send(Message::UpdateCheckResult(update)).await.ok();
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
@@ -576,7 +586,22 @@ impl Application for App {
                 self.persist();
             }
             Message::TrayCheckUpdate => {
+                self.update_panel = Some(platform::UpdateInfo::Checking);
+                self.show_settings = false;
+                self.show_about = false;
+                self.show_shortcuts = false;
+                self.show_changelog = false;
+                platform::show_window();
                 platform::check_for_update(CURRENT_VERSION);
+            }
+            Message::UpdateCheckResult(info) => {
+                self.update_panel = Some(info);
+            }
+            Message::UpdateConfirmDownload { version, url } => {
+                platform::trigger_download(url, version);
+            }
+            Message::DismissUpdatePanel => {
+                self.update_panel = None;
             }
             Message::TrayPauseResume => {
                 return self.update(Message::TimerToggle);
@@ -604,6 +629,10 @@ impl Application for App {
 
     fn view(&self) -> Element<Message> {
         let p = self.tod.palette();
+
+        if let Some(ref info) = self.update_panel {
+            return update_panel_view(p, info);
+        }
 
         if self.task_dock_mode {
             return task_dock_view(
@@ -1081,6 +1110,115 @@ fn tasks_view<'a>(
         .height(Length::Fill)
         .style(iced_theme::Container::Custom(Box::new(Flat)))
         .into()
+}
+
+// ── Update Panel ──────────────────────────────────────────────────────────
+
+fn update_panel_view(p: Palette, info: &platform::UpdateInfo) -> Element<'static, Message> {
+    let (heading, sub, action): (&'static str, String, Option<Element<'static, Message>>) =
+        match info {
+            platform::UpdateInfo::Checking => (
+                "Checking for updates",
+                "Connecting to GitHub…".into(),
+                None,
+            ),
+            platform::UpdateInfo::UpToDate => (
+                "You're up to date",
+                format!("v{} is the latest release.", CURRENT_VERSION),
+                Some(
+                    button(text("Got it").size(11))
+                        .padding([7, 24])
+                        .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
+                        .on_press(Message::DismissUpdatePanel)
+                        .into(),
+                ),
+            ),
+            platform::UpdateInfo::Available { version, url } => {
+                let v = version.clone();
+                let u = url.clone();
+                (
+                    "Update available",
+                    format!("v{} is ready to download.", v),
+                    Some(
+                        button(text(format!("Download & install  v{}", v)).size(11))
+                            .padding([7, 24])
+                            .style(iced_theme::Button::Custom(Box::new(AccentBtn(p))))
+                            .on_press(Message::UpdateConfirmDownload { version: v, url: u })
+                            .into(),
+                    ),
+                )
+            }
+            platform::UpdateInfo::Downloading => (
+                "Downloading",
+                "Please wait — fetching the update…".into(),
+                None,
+            ),
+            platform::UpdateInfo::Ready { version } => {
+                let v = version.clone();
+                (
+                    "Ready to install",
+                    format!("v{} will launch automatically after you quit.", v),
+                    Some(
+                        button(text("Quit & install").size(11))
+                            .padding([7, 24])
+                            .style(iced_theme::Button::Custom(Box::new(AccentBtn(p))))
+                            .on_press(Message::TrayQuit)
+                            .into(),
+                    ),
+                )
+            }
+            platform::UpdateInfo::Failed(msg) => (
+                "Update failed",
+                msg.clone(),
+                Some(
+                    button(text("Dismiss").size(11))
+                        .padding([7, 24])
+                        .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
+                        .on_press(Message::DismissUpdatePanel)
+                        .into(),
+                ),
+            ),
+        };
+
+    let mut items: Vec<Element<Message>> = vec![
+        row(vec![
+            text("update")
+                .size(13)
+                .style(iced_theme::Text::Color(p.text))
+                .into(),
+            Space::with_width(Length::Fill).into(),
+            button(text("done").size(10))
+                .padding([2, 8])
+                .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))))
+                .on_press(Message::DismissUpdatePanel)
+                .into(),
+        ])
+        .align_items(Alignment::Center)
+        .into(),
+        Space::with_height(24).into(),
+        text(heading)
+            .size(16)
+            .style(iced_theme::Text::Color(p.accent))
+            .into(),
+        Space::with_height(8).into(),
+        text(sub)
+            .size(11)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into(),
+        Space::with_height(20).into(),
+    ];
+
+    if let Some(btn) = action {
+        items.push(btn);
+    }
+
+    container(
+        scrollable(column(items).padding([14, 20])).height(Length::Fill),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(iced_theme::Container::Custom(Box::new(Flat)))
+    .into()
 }
 
 // ── Task Dock View ────────────────────────────────────────────────────────
