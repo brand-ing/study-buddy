@@ -47,14 +47,15 @@ pub fn setup_tray() {
     let rgba = make_icon_rgba(Phase::Work, false);
     let icon = tray_icon::Icon::from_rgba(rgba, 32, 32).expect("tray icon rgba");
 
-    let menu     = tray_icon::menu::Menu::new();
-    let quit_i   = tray_icon::menu::MenuItem::with_id("quit",         "Quit",             true, None);
-    let update_i = tray_icon::menu::MenuItem::with_id("check_update", "Check for update", true, None);
-    let about_i  = tray_icon::menu::MenuItem::with_id("about",        "About focus",      true, None);
-    let pause_i  = tray_icon::menu::MenuItem::with_id("pause_resume", "Resume timer",     true, None);
-    let sep      = tray_icon::menu::PredefinedMenuItem::separator();
-    let show_i   = tray_icon::menu::MenuItem::with_id("show",         "Show focus",       true, None);
-    let _ = menu.append_items(&[&quit_i, &update_i, &about_i, &sep, &pause_i, &show_i]);
+    let menu      = tray_icon::menu::Menu::new();
+    let quit_i    = tray_icon::menu::MenuItem::with_id("quit",         "Quit",             true, None);
+    let update_i  = tray_icon::menu::MenuItem::with_id("check_update", "Check for update", true, None);
+    let about_i   = tray_icon::menu::MenuItem::with_id("about",        "About focus",      true, None);
+    let pause_i   = tray_icon::menu::MenuItem::with_id("pause_resume", "Resume timer",     true, None);
+    let sep       = tray_icon::menu::PredefinedMenuItem::separator();
+    let show_i    = tray_icon::menu::MenuItem::with_id("show",         "Show focus",       true, None);
+    let tasks_i   = tray_icon::menu::MenuItem::with_id("show_tasks",   "Show tasks",       true, None);
+    let _ = menu.append_items(&[&quit_i, &update_i, &about_i, &sep, &pause_i, &show_i, &tasks_i]);
 
     let pause_leaked: &'static tray_icon::menu::MenuItem = Box::leak(Box::new(pause_i));
     PAUSE_ITEM_PTR.store(pause_leaked as *const _ as *mut _, Ordering::Relaxed);
@@ -94,6 +95,15 @@ pub fn update_tray(phase: Phase, running: bool, remaining: u32) {
     if !pause_ptr.is_null() {
         let item = unsafe { &*pause_ptr };
         item.set_text(if running { "Pause timer" } else { "Resume timer" });
+    }
+}
+
+pub fn get_dock_position(dock_width: f32, dock_height: f32) -> (f32, f32) {
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+        let sw = GetSystemMetrics(SM_CXSCREEN) as f32;
+        let sh = GetSystemMetrics(SM_CYSCREEN) as f32;
+        (sw - dock_width - 10.0, sh - dock_height - 50.0)
     }
 }
 

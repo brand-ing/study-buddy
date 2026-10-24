@@ -13,7 +13,8 @@ use iced::widget::{
     button, column, container, mouse_area, progress_bar, row, scrollable, text, text_input, Space,
 };
 use iced::{
-    Alignment, Application, Color, Command, Element, Length, Settings, Subscription, Theme,
+    Alignment, Application, Color, Command, Element, Length, Point, Settings, Size, Subscription,
+    Theme,
 };
 use iced::futures::SinkExt;
 use iced::{subscription, time, window};
@@ -92,6 +93,8 @@ struct App {
     autostart: bool,
     // changelog
     show_changelog: bool,
+    // task dock panel (tray popup)
+    task_dock_mode: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -142,6 +145,8 @@ enum Message {
     KeyLeft,
     KeyRight,
     KeyEscape,
+    KeyShift1,
+    KeyShift2,
     // panels
     ToggleShortcuts,
     ToggleAutostart,
@@ -150,7 +155,9 @@ enum Message {
     TrayCheckUpdate,
     TrayPauseResume,
     TrayAbout,
+    TrayShowTasks,
     ToggleAbout,
+    TaskDockClose,
     OpenUrl(String),
 }
 
@@ -194,6 +201,7 @@ impl Application for App {
                 show_shortcuts: false,
                 autostart: platform::get_autostart(),
                 show_changelog: s.last_seen_version != CURRENT_VERSION,
+                task_dock_mode: false,
             },
             Command::none(),
         )
@@ -237,6 +245,8 @@ impl Application for App {
                     {
                         Some(Message::ToggleShortcuts)
                     }
+                    iced::keyboard::Key::Character(c) if c.as_str() == "!" => Some(Message::KeyShift1),
+                    iced::keyboard::Key::Character(c) if c.as_str() == "@" => Some(Message::KeyShift2),
                     iced::keyboard::Key::Named(Named::ArrowLeft) => Some(Message::KeyLeft),
                     iced::keyboard::Key::Named(Named::ArrowRight) => Some(Message::KeyRight),
                     iced::keyboard::Key::Named(Named::Escape) => Some(Message::KeyEscape),
@@ -266,6 +276,7 @@ impl Application for App {
                         "check_update"  => { tx.send(Message::TrayCheckUpdate).await.ok(); }
                         "pause_resume"  => { tx.send(Message::TrayPauseResume).await.ok(); }
                         "about"         => { tx.send(Message::TrayAbout).await.ok(); }
+                        "show_tasks"    => { tx.send(Message::TrayShowTasks).await.ok(); }
                         _ => {}
                     }
                 }
@@ -480,7 +491,26 @@ impl Application for App {
                 self.persist();
             }
             // tray / hotkey
-            Message::TrayShow | Message::GlobalHotkeyFired => { platform::show_window(); }
+            Message::TrayShow | Message::GlobalHotkeyFired => {
+                self.task_dock_mode = false;
+                platform::show_window();
+                return window::resize(window::Id::MAIN, Size::new(320.0, 260.0));
+            }
+            Message::TrayShowTasks => {
+                self.task_dock_mode = true;
+                self.active_tab = Tab::Tasks;
+                platform::show_window();
+                let (dx, dy) = platform::get_dock_position(280.0, 460.0);
+                return Command::batch([
+                    window::resize(window::Id::MAIN, Size::new(280.0, 460.0)),
+                    window::move_to(window::Id::MAIN, Point::new(dx, dy)),
+                ]);
+            }
+            Message::TaskDockClose => {
+                self.task_dock_mode = false;
+                platform::hide_window();
+                return window::resize(window::Id::MAIN, Size::new(320.0, 260.0));
+            }
             Message::TrayQuit => return window::close(window::Id::MAIN),
             // keyboard shortcuts
             Message::KeySpace => {
@@ -515,6 +545,23 @@ impl Application for App {
                 if self.show_shortcuts { self.show_shortcuts = false; }
                 else if self.show_settings { self.show_settings = false; }
                 else if self.show_about { self.show_about = false; }
+            }
+            Message::KeyShift1 => {
+                if self.task_dock_mode {
+                    self.task_dock_mode = false;
+                    return window::resize(window::Id::MAIN, Size::new(320.0, 260.0));
+                }
+            }
+            Message::KeyShift2 => {
+                if !self.task_dock_mode {
+                    self.task_dock_mode = true;
+                    self.active_tab = Tab::Tasks;
+                    let (dx, dy) = platform::get_dock_position(280.0, 460.0);
+                    return Command::batch([
+                        window::resize(window::Id::MAIN, Size::new(280.0, 460.0)),
+                        window::move_to(window::Id::MAIN, Point::new(dx, dy)),
+                    ]);
+                }
             }
             Message::ToggleShortcuts => {
                 self.show_settings = false;
@@ -557,6 +604,20 @@ impl Application for App {
 
     fn view(&self) -> Element<Message> {
         let p = self.tod.palette();
+
+        if self.task_dock_mode {
+            return task_dock_view(
+                p,
+                &self.tasks,
+                &self.task_input,
+                self.hovered_task_id,
+                self.drag_task_id,
+                self.drag_target_idx,
+                self.editing_task_id,
+                &self.edit_text,
+            );
+        }
+
         let session_color: Option<Color> = if self.timer.running {
             Some(if self.timer.phase == Phase::Work { p.accent } else { p.success })
         } else {
@@ -1022,6 +1083,211 @@ fn tasks_view<'a>(
         .into()
 }
 
+// ── Task Dock View ────────────────────────────────────────────────────────
+
+fn task_dock_view<'a>(
+    p: Palette,
+    tasks: &'a [Task],
+    input: &'a str,
+    hovered_task_id: Option<u64>,
+    drag_task_id: Option<u64>,
+    drag_target_idx: usize,
+    editing_task_id: Option<u64>,
+    edit_text: &'a str,
+) -> Element<'a, Message> {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    let time_str = format!("{:02}:{:02}", now.hour(), now.minute());
+
+    let close_btn = button(
+        text("✕").size(9).style(iced_theme::Text::Color(p.subtext)),
+    )
+    .padding([0, 12])
+    .height(Length::Fixed(30.0))
+    .style(iced_theme::Button::Custom(Box::new(CloseBtn(p))))
+    .on_press(Message::TaskDockClose);
+
+    let drag_zone = mouse_area(
+        container(Space::new(Length::Fill, Length::Fixed(30.0))),
+    )
+    .on_press(Message::TitleBarDrag);
+
+    let header_bar = container(
+        row(vec![
+            Space::with_width(10).into(),
+            text(APP_NAME).size(10).style(iced_theme::Text::Color(p.accent)).into(),
+            Space::with_width(6).into(),
+            text(time_str).size(10).style(iced_theme::Text::Color(p.subtext)).into(),
+            drag_zone.into(),
+            close_btn.into(),
+        ])
+        .align_items(Alignment::Center)
+        .height(Length::Fixed(30.0)),
+    )
+    .width(Length::Fill)
+    .style(iced_theme::Container::Custom(Box::new(Flat)));
+
+    // Task list (same structure as tasks_view, same padding so drag y-offset matches)
+    let pending = tasks.iter().filter(|t| !t.done).count();
+    let done_count = tasks.len() - pending;
+
+    let mut clear_btn = button(
+        text("clear done").size(10).style(iced_theme::Text::Color(p.subtext)),
+    )
+    .padding([2, 6])
+    .style(iced_theme::Button::Custom(Box::new(GhostBtn(p))));
+    if done_count > 0 {
+        clear_btn = clear_btn.on_press(Message::TaskClearDone);
+    }
+
+    let task_header = row(vec![
+        text("tasks")
+            .size(13)
+            .style(iced_theme::Text::Color(p.text))
+            .into(),
+        Space::with_width(6).into(),
+        text(format!("· {}", pending))
+            .size(11)
+            .style(iced_theme::Text::Color(p.subtext))
+            .into(),
+        Space::with_width(Length::Fill).into(),
+        clear_btn.into(),
+    ])
+    .align_items(Alignment::Center);
+
+    let display: Vec<&Task> = if let Some(drag_id) = drag_task_id {
+        if let Some(src) = tasks.iter().position(|t| t.id == drag_id) {
+            let mut order: Vec<&Task> = tasks.iter().collect();
+            let item = order.remove(src);
+            let dst = drag_target_idx.min(order.len());
+            order.insert(dst, item);
+            order
+        } else {
+            tasks.iter().collect()
+        }
+    } else {
+        tasks.iter().collect()
+    };
+
+    let items: Vec<Element<Message>> = display
+        .iter()
+        .enumerate()
+        .map(|(i, &task)| {
+            let is_dragging = drag_task_id == Some(task.id);
+            let is_hovered  = hovered_task_id == Some(task.id);
+            let is_editing  = editing_task_id == Some(task.id);
+
+            let grip_alpha: f32 =
+                if is_dragging { 0.7 } else if is_hovered { 0.45 } else { 0.0 };
+            let grip = mouse_area(
+                container(
+                    text("≡")
+                        .size(13)
+                        .style(iced_theme::Text::Color(Color { a: grip_alpha, ..p.subtext })),
+                )
+                .width(Length::Fixed(16.0))
+                .center_x()
+                .center_y(),
+            )
+            .on_press(Message::TaskDragStart { id: task.id, idx: i });
+
+            let check = button(
+                text(if task.done { "✓" } else { " " })
+                    .size(10)
+                    .style(iced_theme::Text::Color(
+                        if task.done { p.bg } else { p.subtext },
+                    )),
+            )
+            .padding([3, 6])
+            .style(iced_theme::Button::Custom(Box::new(TaskCheckBtn { p, done: task.done })))
+            .on_press(Message::TaskToggle(task.id));
+
+            let label_area: Element<Message> = if is_editing {
+                text_input("", edit_text)
+                    .on_input(Message::TaskEditChanged)
+                    .on_submit(Message::TaskEditSubmit)
+                    .padding([3, 6])
+                    .size(12)
+                    .style(iced_theme::TextInput::Custom(Box::new(TaskInput(p))))
+                    .into()
+            } else {
+                let label = text(&task.text).size(12).style(iced_theme::Text::Color(
+                    if task.done { p.subtext } else { p.text },
+                ));
+                mouse_area(
+                    container(label).padding([0, 8]).width(Length::Fill),
+                )
+                .on_press(Message::TaskPressed(task.id))
+                .into()
+            };
+
+            let del = button(text("✕").size(9))
+                .padding([3, 5])
+                .style(iced_theme::Button::Custom(Box::new(DeleteBtn(p))))
+                .on_press(Message::TaskDelete(task.id));
+
+            let row_style = if is_dragging {
+                iced_theme::Container::Custom(Box::new(DragRow(p)))
+            } else {
+                iced_theme::Container::Custom(Box::new(Flat))
+            };
+
+            mouse_area(
+                container(
+                    row(vec![
+                        grip.into(),
+                        check.into(),
+                        label_area,
+                        del.into(),
+                        Space::with_width(8).into(),
+                    ])
+                    .align_items(Alignment::Center),
+                )
+                .padding([4, 2])
+                .style(row_style),
+            )
+            .on_enter(Message::TaskHovered(Some(task.id)))
+            .on_exit(Message::TaskHovered(None))
+            .into()
+        })
+        .collect();
+
+    let list = scrollable(column(items).spacing(1).padding([2, 0])).height(Length::Fill);
+
+    let add_input = text_input("add a task...", input)
+        .on_input(Message::TaskInputChanged)
+        .on_submit(Message::TaskAdd)
+        .padding([7, 10])
+        .size(12)
+        .style(iced_theme::TextInput::Custom(Box::new(TaskInput(p))));
+
+    let task_section = container(
+        column(vec![
+            task_header.into(),
+            Space::with_height(8).into(),
+            list.into(),
+            Space::with_height(6).into(),
+            add_input.into(),
+        ])
+        .padding([14, 14]),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(iced_theme::Container::Custom(Box::new(Flat)));
+
+    let body = column(vec![
+        header_bar.into(),
+        task_section.into(),
+    ])
+    .height(Length::Fill);
+
+    container(body)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(iced_theme::Container::Custom(Box::new(OuterBorder(p))))
+        .into()
+}
+
 // ── Settings View ─────────────────────────────────────────────────────────
 
 fn settings_view<'a>(
@@ -1264,11 +1530,17 @@ fn shortcuts_view(p: Palette) -> Element<'static, Message> {
         Space::with_height(12).into(),
         section("Navigate").into(),
         Space::with_height(6).into(),
-        row_item("← →",    "switch tabs"),
+        row_item("← →",       "switch tabs"),
         Space::with_height(4).into(),
-        row_item("Esc",     "close panel"),
+        row_item("Esc",        "close panel"),
         Space::with_height(4).into(),
-        row_item("?",       "this panel"),
+        row_item("?",          "this panel"),
+        Space::with_height(12).into(),
+        section("View").into(),
+        Space::with_height(6).into(),
+        row_item("Shift+1",    "main window"),
+        Space::with_height(4).into(),
+        row_item("Shift+2",    "task dock"),
         Space::with_height(12).into(),
         section("Global").into(),
         Space::with_height(6).into(),
