@@ -967,6 +967,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "focus-app"
+version = "0.1.7"
+dependencies = [
+ "chrono",
+ "dirs 5.0.1",
+ "global-hotkey",
+ "iced",
+ "rodio",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tray-icon",
+ "ureq",
+ "windows-sys 0.52.0",
+ "winreg",
+ "winrt-notification",
+]
+
+[[package]]
+name = "focus-client"
+version = "0.1.7"
+dependencies = [
+ "focus-core",
+]
+
+[[package]]
+name = "focus-core"
+version = "0.1.7"
+dependencies = [
+ "chrono",
+ "dirs 5.0.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "focusd"
+version = "0.1.7"
+dependencies = [
+ "focus-core",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3535,25 +3578,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "study-buddy"
-version = "0.1.7"
-dependencies = [
- "chrono",
- "dirs 5.0.1",
- "global-hotkey",
- "iced",
- "rodio",
- "serde",
- "serde_json",
- "tokio",
- "tray-icon",
- "ureq",
- "windows-sys 0.52.0",
- "winreg",
- "winrt-notification",
 ]
 
 [[package]]

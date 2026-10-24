@@ -1,0 +1,23 @@
+[package]
+name = "focus-app"
+version = "0.1.7"
+edition = "2021"
+
+[[bin]]
+name = "focus"
+path = "src/main.rs"
+
+[dependencies]
+iced = { version = "0.12", features = ["tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+dirs = "5"
+rodio = { version = "0.19", default-features = false }
+tokio = { version = "1", features = ["time"] }
+tray-icon = "0.19"
+global-hotkey = "0.6"
+winrt-notification = "0.4"
+winreg = "0.52"
+windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+ureq = "2"

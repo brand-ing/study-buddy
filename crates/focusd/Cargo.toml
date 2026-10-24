@@ -1,0 +1,7 @@
+[package]
+name = "focusd"
+version = "0.1.7"
+edition = "2021"
+
+[dependencies]
+focus-core = { path = "../focus-core" }
