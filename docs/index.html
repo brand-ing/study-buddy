@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>focus — a minimal study timer for Windows</title>
+<meta name="description" content="Pomodoro timer, daily to-do list, and activity heatmap in a compact always-on-top window. Free and open source.">
+<style>
+  :root {
+    --bg: #1A0A2E; --surface: #2D1B45; --surface2: #3D2B55;
+    --accent: #FF9A7B; --text: #FDE8D8; --subtext: #B89A8A; --green: #4ADE80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 72px 24px 48px; }
+  h1 { font-size: 3rem; margin: 0; letter-spacing: -0.02em; }
+  h2 { font-size: 1.25rem; margin: 56px 0 16px; }
+  .tagline { color: var(--subtext); font-size: 1.2rem; margin: 8px 0 32px; }
+  a { color: var(--accent); }
+
+  .glance {
+    display: inline-flex; align-items: center; gap: 14px;
+    background: var(--surface); border-radius: 999px; padding: 10px 22px;
+    position: relative; overflow: hidden; margin-bottom: 40px;
+  }
+  .glance::before {
+    content: ""; position: absolute; inset: 0; width: 62%;
+    background: color-mix(in srgb, var(--green) 28%, transparent);
+  }
+  .glance span { position: relative; }
+  .glance .phase { color: var(--subtext); font-size: .85rem; text-transform: uppercase; letter-spacing: .08em; }
+  .glance .time { font-variant-numeric: tabular-nums; font-size: 1.4rem; font-weight: 600; }
+
+  .btn {
+    display: inline-block; background: var(--accent); color: var(--bg);
+    font-weight: 600; text-decoration: none; padding: 12px 24px; border-radius: 10px;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .meta { color: var(--subtext); font-size: .9rem; margin-top: 12px; }
+
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; padding: 0; list-style: none; }
+  .features li { background: var(--surface); border-radius: 12px; padding: 16px 18px; }
+  .features b { display: block; margin-bottom: 4px; }
+  .features small { color: var(--subtext); font-size: .9rem; }
+
+  .note { background: var(--surface); border-left: 3px solid var(--accent); border-radius: 8px; padding: 14px 18px; color: var(--subtext); }
+  .note b { color: var(--text); }
+
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 8px 0; border-bottom: 1px solid var(--surface2); }
+  td:last-child { color: var(--subtext); }
+  kbd { background: var(--surface2); border-radius: 5px; padding: 2px 8px; font: .85rem ui-monospace, Consolas, monospace; }
+
+  footer { color: var(--subtext); font-size: .9rem; margin-top: 64px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>focus</h1>
+  <p class="tagline">A minimal study timer for Windows. Pomodoro, to-dos, and a heatmap of your streak, all in one small always-on-top window.</p>
+
+  <div class="glance" aria-hidden="true">
+    <span class="phase">Work</span><span class="time">18:42</span>
+  </div>
+
+  <div>
+    <a class="btn" href="https://github.com/brand-ing/study-buddy/releases/latest/download/focus.exe">Download for Windows</a>
+    <p class="meta">Single .exe · no installer · no admin rights · free and open source (MIT)</p>
+  </div>
+
+  <h2>Features</h2>
+  <ul class="features">
+    <li><b>Pomodoro timer</b><small>Classic 25/5/15, Deep Work 50/10, Balanced 45/15, or custom.</small></li>
+    <li><b>To-do list</b><small>Add, check off, drag to reorder, double-click to edit.</small></li>
+    <li><b>Task dock</b><small>A taller scrollable task panel that pops up from the tray.</small></li>
+    <li><b>Glance</b><small>A tiny draggable timer capsule that fills green as a session runs out.</small></li>
+    <li><b>Activity heatmap</b><small>16 weeks of focus, one square per day.</small></li>
+    <li><b>Time-of-day themes</b><small>Six palettes that shift from sunrise to late night.</small></li>
+  </ul>
+
+  <h2>First run</h2>
+  <p class="note"><b>Windows may show "Windows protected your PC."</b> focus isn't code-signed yet, so SmartScreen doesn't recognise it. Click <b>More info → Run anyway</b>. The source and the build that produced the .exe are public on <a href="https://github.com/brand-ing/study-buddy">GitHub</a>.</p>
+  <p>The app lives in your system tray. To keep it, move <code>focus.exe</code> somewhere like <code>%LOCALAPPDATA%\focus\</code> and turn on <b>Launch at login</b> in Settings.</p>
+
+  <h2>Shortcuts</h2>
+  <table>
+    <tr><td><kbd>Space</kbd></td><td>Start / pause</td></tr>
+    <tr><td><kbd>Ctrl+R</kbd> / <kbd>Ctrl+S</kbd></td><td>Reset / skip phase</td></tr>
+    <tr><td><kbd>Ctrl+1</kbd> <kbd>Ctrl+2</kbd> <kbd>Ctrl+3</kbd></td><td>Main window / task dock / glance</td></tr>
+    <tr><td><kbd>Ctrl+Shift+F</kbd></td><td>Show / hide from anywhere</td></tr>
+    <tr><td><kbd>?</kbd></td><td>All shortcuts</td></tr>
+  </table>
+
+  <footer>
+    <a href="https://github.com/brand-ing/study-buddy">Source on GitHub</a> ·
+    <a href="https://github.com/brand-ing/study-buddy/releases">All releases</a> ·
+    <a href="https://brand-ing.github.io/">brand-ing</a>
+  </footer>
+</main>
+</body>
+</html>

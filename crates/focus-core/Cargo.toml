@@ -2,6 +2,7 @@
 name = "focus-core"
 version = "0.1.7"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

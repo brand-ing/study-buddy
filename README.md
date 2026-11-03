@@ -48,3 +48,7 @@ cargo build --release
 ```
 
 The binary is at `target\release\focus.exe`.
+
+## License
+
+[MIT](LICENSE)
