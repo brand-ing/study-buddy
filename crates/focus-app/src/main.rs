@@ -22,12 +22,12 @@ use sound::AudioPlayer;
 use storage::SaveData;
 use theme::{
     AccentBtn, AppBg, CloseBtn, DeleteBtn, DotCell, DragRow, Flat, GhostBtn, HeatCell,
-    OuterBorder, Palette, PinBtn, ProgressStyle, SettingsBtn, TaskCheckBtn,
+    OuterBorder, Palette, PillBg, PillBtn, PinBtn, ProgressStyle, SettingsBtn, TaskCheckBtn,
     TaskInput, TimeOfDay,
 };
 
 const APP_NAME: &str = "focus";
-const CURRENT_VERSION: &str = "0.1.7";
+const CURRENT_VERSION: &str = "0.1.8";
 const AUTHOR: &str = "Brandon Irving";
 const GITHUB_URL: &str = "https://github.com/brand-ing/study-buddy";
 const DONATE_URL: &str = ""; // set to your donation link when ready
@@ -54,6 +54,25 @@ impl Tab {
             Tab::Timer => Tab::Tasks,
             Tab::Tasks => Tab::Heatmap,
             Tab::Heatmap => Tab::Timer,
+        }
+    }
+}
+
+/// Which window layout is showing. Switched with Ctrl+1 / Ctrl+2 / Ctrl+3.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ViewMode {
+    Main,
+    TaskDock,
+    /// Tiny capsule: pin, phase, countdown, close.
+    Glance,
+}
+
+impl ViewMode {
+    fn size(self) -> (f32, f32) {
+        match self {
+            ViewMode::Main     => (320.0, 260.0),
+            ViewMode::TaskDock => (280.0, 460.0),
+            ViewMode::Glance   => (172.0, 34.0),
         }
     }
 }
@@ -93,8 +112,10 @@ struct App {
     autostart: bool,
     // changelog
     show_changelog: bool,
-    // task dock panel (tray popup)
-    task_dock_mode: bool,
+    // window layout (main / task dock / glance)
+    view_mode: ViewMode,
+    // a work session finished and the next one hasn't been started yet
+    session_ended: bool,
     // in-app update panel
     update_panel: Option<platform::UpdateInfo>,
 }
@@ -147,8 +168,7 @@ enum Message {
     KeyLeft,
     KeyRight,
     KeyEscape,
-    KeyShift1,
-    KeyShift2,
+    SetView(ViewMode),
     // panels
     ToggleShortcuts,
     ToggleAutostart,
@@ -207,7 +227,8 @@ impl Application for App {
                 show_shortcuts: false,
                 autostart: platform::get_autostart(),
                 show_changelog: s.last_seen_version != CURRENT_VERSION,
-                task_dock_mode: false,
+                view_mode: ViewMode::Main,
+                session_ended: false,
                 update_panel: None,
             },
             Command::none(),
@@ -239,21 +260,35 @@ impl Application for App {
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
                 iced::mouse::Button::Left,
             )) => Some(Message::MouseReleased),
-            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, .. })
-                if status == iced::event::Status::Ignored =>
-            {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 use iced::keyboard::key::Named;
+                // iced reports keys without modifiers applied (Shift+1 arrives
+                // as "1", not "!"), so chords must check `modifiers` explicitly.
+                // Ctrl chords are checked before `status` because a focused text
+                // input captures every key press (a bare R or S would be typed
+                // into the task box instead).
+                if modifiers.control() && !modifiers.alt() && !modifiers.shift() {
+                    if let iced::keyboard::Key::Character(c) = &key {
+                        match c.as_str() {
+                            "1" => return Some(Message::SetView(ViewMode::Main)),
+                            "2" => return Some(Message::SetView(ViewMode::TaskDock)),
+                            "3" => return Some(Message::SetView(ViewMode::Glance)),
+                            "r" => return Some(Message::KeyR),
+                            "s" => return Some(Message::KeyS),
+                            _ => {}
+                        }
+                    }
+                }
+                if status != iced::event::Status::Ignored || modifiers.control() {
+                    return None;
+                }
                 match &key {
                     iced::keyboard::Key::Named(Named::Space) => Some(Message::KeySpace),
-                    iced::keyboard::Key::Character(c) if c.as_str() == "r" => Some(Message::KeyR),
-                    iced::keyboard::Key::Character(c) if c.as_str() == "s" => Some(Message::KeyS),
                     iced::keyboard::Key::Character(c)
                         if c.as_str() == "?" || c.as_str() == "/" =>
                     {
                         Some(Message::ToggleShortcuts)
                     }
-                    iced::keyboard::Key::Character(c) if c.as_str() == "!" => Some(Message::KeyShift1),
-                    iced::keyboard::Key::Character(c) if c.as_str() == "@" => Some(Message::KeyShift2),
                     iced::keyboard::Key::Named(Named::ArrowLeft) => Some(Message::KeyLeft),
                     iced::keyboard::Key::Named(Named::ArrowRight) => Some(Message::KeyRight),
                     iced::keyboard::Key::Named(Named::Escape) => Some(Message::KeyEscape),
@@ -315,6 +350,7 @@ impl Application for App {
         match msg {
             Message::Tick => {
                 if self.timer.running && self.timer.tick() {
+                    self.session_ended = true;
                     self.chime();
                     platform::notify_work_done();
                     self.heatmap.add(self.timer.config.work_mins);
@@ -324,6 +360,7 @@ impl Application for App {
             }
             Message::TimerToggle => {
                 self.click();
+                self.session_ended = false;
                 if self.timer.phase == Phase::OpenBreak {
                     self.timer.advance();
                     self.timer.running = true;
@@ -334,11 +371,13 @@ impl Application for App {
             }
             Message::TimerReset => {
                 self.click();
+                self.session_ended = false;
                 self.timer.reset();
                 platform::update_tray(self.timer.phase, self.timer.running, self.timer.remaining);
             }
             Message::TimerSkip => {
                 self.click();
+                self.session_ended = false;
                 self.timer.skip();
                 platform::update_tray(self.timer.phase, self.timer.running, self.timer.remaining);
             }
@@ -477,6 +516,7 @@ impl Application for App {
                 self.custom_work_input  = cfg.work_mins.to_string();
                 self.custom_short_input = cfg.short_mins.to_string();
                 self.custom_long_input  = cfg.long_mins.to_string();
+                self.session_ended = false;
                 self.timer.set_config(cfg);
                 self.persist();
             }
@@ -492,6 +532,7 @@ impl Application for App {
                 self.custom_work_input  = work.to_string();
                 self.custom_short_input = short.to_string();
                 self.custom_long_input  = long.to_string();
+                self.session_ended = false;
                 self.timer.set_config(cfg);
                 self.persist();
             }
@@ -501,25 +542,35 @@ impl Application for App {
                 self.persist();
             }
             // tray / hotkey
-            Message::TrayShow | Message::GlobalHotkeyFired => {
-                self.task_dock_mode = false;
+            Message::TrayShow => {
                 platform::show_window();
-                return window::resize(window::Id::MAIN, Size::new(320.0, 260.0));
+                return self.set_view(ViewMode::Main);
+            }
+            Message::GlobalHotkeyFired => {
+                // Toggle: hide when it's in front (or pinned on top, e.g. the
+                // glance capsule), otherwise bring it back in its current view.
+                if platform::is_window_shown()
+                    && (platform::is_foreground() || self.always_on_top)
+                {
+                    platform::hide_window();
+                } else {
+                    platform::show_window();
+                    return self.set_view(self.view_mode);
+                }
             }
             Message::TrayShowTasks => {
-                self.task_dock_mode = true;
-                self.active_tab = Tab::Tasks;
                 platform::show_window();
-                let (dx, dy) = platform::get_dock_position(280.0, 460.0);
-                return Command::batch([
-                    window::resize(window::Id::MAIN, Size::new(280.0, 460.0)),
-                    window::move_to(window::Id::MAIN, Point::new(dx, dy)),
-                ]);
+                return self.set_view(ViewMode::TaskDock);
             }
             Message::TaskDockClose => {
-                self.task_dock_mode = false;
                 platform::hide_window();
+                self.view_mode = ViewMode::Main;
                 return window::resize(window::Id::MAIN, Size::new(320.0, 260.0));
+            }
+            Message::SetView(mode) => {
+                if mode != self.view_mode {
+                    return self.set_view(mode);
+                }
             }
             Message::TrayQuit => return window::close(window::Id::MAIN),
             // keyboard shortcuts
@@ -542,12 +593,12 @@ impl Application for App {
                 }
             }
             Message::KeyLeft => {
-                if !self.show_settings && !self.show_shortcuts {
+                if self.view_mode == ViewMode::Main && !self.show_settings && !self.show_shortcuts {
                     return self.update(Message::TabSelected(self.active_tab.prev()));
                 }
             }
             Message::KeyRight => {
-                if !self.show_settings && !self.show_shortcuts {
+                if self.view_mode == ViewMode::Main && !self.show_settings && !self.show_shortcuts {
                     return self.update(Message::TabSelected(self.active_tab.next()));
                 }
             }
@@ -556,24 +607,8 @@ impl Application for App {
                 else if self.show_settings { self.show_settings = false; }
                 else if self.show_about { self.show_about = false; }
             }
-            Message::KeyShift1 => {
-                if self.task_dock_mode {
-                    self.task_dock_mode = false;
-                    return window::resize(window::Id::MAIN, Size::new(320.0, 260.0));
-                }
-            }
-            Message::KeyShift2 => {
-                if !self.task_dock_mode {
-                    self.task_dock_mode = true;
-                    self.active_tab = Tab::Tasks;
-                    let (dx, dy) = platform::get_dock_position(280.0, 460.0);
-                    return Command::batch([
-                        window::resize(window::Id::MAIN, Size::new(280.0, 460.0)),
-                        window::move_to(window::Id::MAIN, Point::new(dx, dy)),
-                    ]);
-                }
-            }
             Message::ToggleShortcuts => {
+                if self.view_mode != ViewMode::Main { return Command::none(); }
                 self.show_settings = false;
                 self.show_shortcuts = !self.show_shortcuts;
             }
@@ -593,6 +628,9 @@ impl Application for App {
                 self.show_changelog = false;
                 platform::show_window();
                 platform::check_for_update(CURRENT_VERSION);
+                if self.view_mode != ViewMode::Main {
+                    return self.set_view(ViewMode::Main);
+                }
             }
             Message::UpdateCheckResult(info) => {
                 self.update_panel = Some(info);
@@ -612,6 +650,9 @@ impl Application for App {
                 self.show_settings = false;
                 self.show_shortcuts = false;
                 self.show_changelog = false;
+                if self.view_mode != ViewMode::Main {
+                    return self.set_view(ViewMode::Main);
+                }
             }
             Message::ToggleAbout => {
                 self.show_about = !self.show_about;
@@ -630,11 +671,15 @@ impl Application for App {
     fn view(&self) -> Element<Message> {
         let p = self.tod.palette();
 
+        if self.view_mode == ViewMode::Glance {
+            return glance_view(p, &self.timer, self.always_on_top, self.session_ended);
+        }
+
         if let Some(ref info) = self.update_panel {
             return update_panel_view(p, info);
         }
 
-        if self.task_dock_mode {
+        if self.view_mode == ViewMode::TaskDock {
             return task_dock_view(
                 p,
                 &self.tasks,
@@ -718,6 +763,24 @@ impl Application for App {
 }
 
 impl App {
+    /// Resize and reposition the window for `mode`, keeping it fully inside
+    /// the current monitor's work area (DPI-aware, taskbar excluded).
+    fn set_view(&mut self, mode: ViewMode) -> Command<Message> {
+        self.view_mode = mode;
+        let (w, h) = mode.size();
+        let (x, y, h) = if mode == ViewMode::TaskDock {
+            self.active_tab = Tab::Tasks;
+            platform::dock_rect(w, h)
+        } else {
+            let (x, y) = platform::fit_on_screen(w, h);
+            (x, y, h)
+        };
+        Command::batch([
+            window::resize(window::Id::MAIN, Size::new(w, h)),
+            window::move_to(window::Id::MAIN, Point::new(x, y)),
+        ])
+    }
+
     fn click(&self) {
         if let Some(ref a) = self.audio { a.play_click(); }
     }
@@ -1221,6 +1284,113 @@ fn update_panel_view(p: Palette, info: &platform::UpdateInfo) -> Element<'static
     .into()
 }
 
+// ── Glance View ───────────────────────────────────────────────────────────
+
+fn glance_view(
+    p: Palette,
+    timer: &Pomodoro,
+    always_on_top: bool,
+    ended: bool,
+) -> Element<'static, Message> {
+    // On the green "session finished" capsule everything is drawn in the
+    // background colour so it stays readable in every theme.
+    let fg  = if ended { p.bg } else { p.text };
+    let dim = if ended { Color { a: 0.6, ..p.bg } } else { p.subtext };
+
+    let icon_btn = |label: &'static str, size: u16, color: Color, danger: bool, msg: Message|
+        -> Element<'static, Message>
+    {
+        button(
+            container(text(label).size(size).style(iced_theme::Text::Color(color)))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x()
+                .center_y(),
+        )
+        .width(Length::Fixed(26.0))
+        .height(Length::Fixed(26.0))
+        .padding(0)
+        .style(iced_theme::Button::Custom(Box::new(PillBtn { fg, danger })))
+        .on_press(msg)
+        .into()
+    };
+
+    let pin_color = match (always_on_top, ended) {
+        (true, true)  => p.bg,
+        (true, false) => p.accent,
+        (false, _)    => dim,
+    };
+    let pin = icon_btn("⊤", 11, pin_color, false, Message::ToggleAlwaysOnTop);
+    let close = icon_btn("✕", 9, dim, true, Message::HideToTray);
+
+    let tag = match timer.phase {
+        Phase::Work       => "work",
+        Phase::ShortBreak => "short",
+        Phase::LongBreak  => "long",
+        Phase::OpenBreak  => "break",
+    };
+    let tag_color = if ended { Color { a: 0.75, ..p.bg } } else { p.accent };
+
+    // Work sessions fill toward green (solid green once finished); breaks
+    // fill with a tint of the theme accent so only work reads as "green".
+    let fill = if timer.phase == Phase::Work {
+        theme::mix(p.bg, p.green, 0.35)
+    } else {
+        theme::mix(p.bg, p.accent, 0.25)
+    };
+
+    let digit_color = if ended {
+        p.bg
+    } else if timer.running {
+        p.text
+    } else {
+        p.gray
+    };
+
+    let readout = row(vec![
+        text(tag)
+            .size(9)
+            .style(iced_theme::Text::Color(tag_color))
+            .width(Length::Fixed(28.0))
+            .into(),
+        Space::with_width(4).into(),
+        text(timer.format())
+            .font(iced::Font::MONOSPACE)
+            .size(15)
+            .style(iced_theme::Text::Color(digit_color))
+            .into(),
+    ])
+    .align_items(Alignment::Center);
+
+    // Everything between the two buttons is a drag handle.
+    let drag_zone = mouse_area(
+        container(readout)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x()
+            .center_y(),
+    )
+    .on_press(Message::TitleBarDrag);
+
+    let (_, h) = ViewMode::Glance.size();
+    container(
+        row(vec![pin, drag_zone.into(), close])
+            .align_items(Alignment::Center)
+            .height(Length::Fill),
+    )
+    .padding(4)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(iced_theme::Container::Custom(Box::new(PillBg {
+        p,
+        fill,
+        progress: timer.progress(),
+        ended,
+        radius: h / 2.0,
+    })))
+    .into()
+}
+
 // ── Task Dock View ────────────────────────────────────────────────────────
 
 fn task_dock_view<'a>(
@@ -1662,9 +1832,9 @@ fn shortcuts_view(p: Palette) -> Element<'static, Message> {
         Space::with_height(6).into(),
         row_item("Space",   "start / pause"),
         Space::with_height(4).into(),
-        row_item("R",       "reset timer"),
+        row_item("Ctrl+R",  "reset timer"),
         Space::with_height(4).into(),
-        row_item("S",       "skip phase"),
+        row_item("Ctrl+S",  "skip phase"),
         Space::with_height(12).into(),
         section("Navigate").into(),
         Space::with_height(6).into(),
@@ -1676,9 +1846,11 @@ fn shortcuts_view(p: Palette) -> Element<'static, Message> {
         Space::with_height(12).into(),
         section("View").into(),
         Space::with_height(6).into(),
-        row_item("Shift+1",    "main window"),
+        row_item("Ctrl+1",     "main window"),
         Space::with_height(4).into(),
-        row_item("Shift+2",    "task dock"),
+        row_item("Ctrl+2",     "task dock"),
+        Space::with_height(4).into(),
+        row_item("Ctrl+3",     "glance (mini timer)"),
         Space::with_height(12).into(),
         section("Global").into(),
         Space::with_height(6).into(),
@@ -1799,33 +1971,29 @@ fn changelog_view(p: Palette) -> Element<'static, Message> {
         ])
         .into(),
         Space::with_height(14).into(),
-        heading("Auto-update"),
+        heading("Glance"),
         Space::with_height(5).into(),
-        bullet("Check for update now downloads and stages the new version automatically"),
+        bullet("New mini timer capsule — Ctrl+3 to open, drag it anywhere"),
         Space::with_height(3).into(),
-        bullet("Update installs silently when you close the app — no session disruption"),
+        bullet("Fills green as a work session runs out, all green when it ends"),
+        Space::with_height(3).into(),
+        bullet("Digits go gray while paused · pin on the left, close to tray on the right"),
         Space::with_height(12).into(),
-        heading("Tray timer"),
+        heading("Shortcuts"),
         Space::with_height(5).into(),
-        bullet("Live countdown shown in tray tooltip — no need to open the window"),
+        bullet("View shortcuts are now Ctrl+1 / Ctrl+2 / Ctrl+3 (Shift+1/2 never fired)"),
         Space::with_height(3).into(),
-        bullet("Icon ring color: green = focus, blue = break, grey = idle"),
+        bullet("Reset is now Ctrl+R and skip is Ctrl+S"),
         Space::with_height(3).into(),
-        bullet("Pause / Resume from the right-click tray menu"),
+        bullet("All of these work even while typing in the task list"),
+        Space::with_height(3).into(),
+        bullet("Ctrl+Shift+F now hides the window too, not just shows it"),
         Space::with_height(12).into(),
-        heading("System"),
+        heading("Fixes"),
         Space::with_height(5).into(),
-        bullet("Close to tray — app keeps running in the background"),
+        bullet("Task dock no longer opens off-screen on scaled displays (125% / 150%)"),
         Space::with_height(3).into(),
-        bullet("Ctrl+Shift+F — show or hide from anywhere"),
-        Space::with_height(3).into(),
-        bullet("Launch at login — toggle in Settings"),
-        Space::with_height(12).into(),
-        heading("Updates"),
-        Space::with_height(5).into(),
-        bullet("Check for update from the system tray menu"),
-        Space::with_height(3).into(),
-        bullet("Changelog shown after each update"),
+        bullet("Windows stay inside the screen and above the taskbar on any monitor"),
         Space::with_height(18).into(),
         button(text("Got it").size(11))
             .padding([7, 24])

@@ -43,6 +43,8 @@ impl TimeOfDay {
                 text:     hex(0xFDE8D8),
                 subtext:  hex(0xB89A8A),
                 success:  hex(0xFFB38E),
+                green:    hex(0x4ADE80),
+                gray:     hex(0x8A8494),
                 name: "Sunrise",
             },
             Self::Morning => Palette {
@@ -54,6 +56,8 @@ impl TimeOfDay {
                 text:     hex(0x1E293B),
                 subtext:  hex(0x64748B),
                 success:  hex(0x16A34A),
+                green:    hex(0x16A34A),
+                gray:     hex(0x9CA3AF),
                 name: "Morning",
             },
             Self::Afternoon => Palette {
@@ -65,6 +69,8 @@ impl TimeOfDay {
                 text:     hex(0x292524),
                 subtext:  hex(0x78716C),
                 success:  hex(0x16A34A),
+                green:    hex(0x16A34A),
+                gray:     hex(0x9CA3AF),
                 name: "Afternoon",
             },
             Self::Evening => Palette {
@@ -76,6 +82,8 @@ impl TimeOfDay {
                 text:     hex(0xFDE8D8),
                 subtext:  hex(0xB89A8A),
                 success:  hex(0x4ADE80),
+                green:    hex(0x4ADE80),
+                gray:     hex(0x8A8494),
                 name: "Evening",
             },
             Self::Night => Palette {
@@ -87,6 +95,8 @@ impl TimeOfDay {
                 text:     hex(0xE2E8F0),
                 subtext:  hex(0x64748B),
                 success:  hex(0x4ADE80),
+                green:    hex(0x4ADE80),
+                gray:     hex(0x6B7280),
                 name: "Night",
             },
             Self::LateNight => Palette {
@@ -98,6 +108,8 @@ impl TimeOfDay {
                 text:     hex(0x94A3B8),
                 subtext:  hex(0x475569),
                 success:  hex(0x4ADE80),
+                green:    hex(0x4ADE80),
+                gray:     hex(0x555B66),
                 name: "Late Night",
             },
         }
@@ -121,6 +133,8 @@ pub struct Palette {
     pub text: Color,
     pub subtext: Color,
     pub success: Color,
+    pub green: Color, // glance: session finished
+    pub gray: Color,  // glance: paused digits
     pub name: &'static str,
 }
 
@@ -404,6 +418,80 @@ impl container::StyleSheet for OuterBorder {
             ..Default::default()
         }
     }
+}
+
+/// Blend `b` over `a` by `t` (0 = a, 1 = b). Used instead of alpha because
+/// the window itself is transparent, so a translucent fill would see through.
+pub fn mix(a: Color, b: Color, t: f32) -> Color {
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: 1.0,
+    }
+}
+
+/// Rounded capsule background for glance mode. `fill` sweeps left to right
+/// as `progress` goes 0 → 1; once the session has `ended` it is solid green.
+pub struct PillBg {
+    pub p: Palette,
+    pub fill: Color,
+    pub progress: f32,
+    pub ended: bool,
+    pub radius: f32,
+}
+impl container::StyleSheet for PillBg {
+    type Style = iced::Theme;
+    fn appearance(&self, _: &iced::Theme) -> container::Appearance {
+        let (background, edge) = if self.ended {
+            (Background::Color(self.p.green), self.p.green)
+        } else if self.progress <= 0.0 {
+            (Background::Color(self.p.bg), self.p.surface2)
+        } else if self.progress >= 0.999 {
+            (Background::Color(self.fill), self.p.surface2)
+        } else {
+            // Hard edge: two stops a hair apart. (iced overwrites stops that
+            // share an exact offset, so they can't be equal.)
+            let t = self.progress;
+            let gradient = iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
+                .add_stop(0.0, self.fill)
+                .add_stop(t, self.fill)
+                .add_stop(t + 0.001, self.p.bg)
+                .add_stop(1.0, self.p.bg);
+            (Background::Gradient(iced::Gradient::Linear(gradient)), self.p.surface2)
+        };
+        container::Appearance {
+            background: Some(background),
+            border: Border { radius: self.radius.into(), color: edge, width: 1.0 },
+            ..Default::default()
+        }
+    }
+}
+
+/// Round icon button inside the glance capsule. `danger` hovers red (close).
+pub struct PillBtn { pub fg: Color, pub danger: bool }
+impl button::StyleSheet for PillBtn {
+    type Style = iced::Theme;
+    fn active(&self, _: &iced::Theme) -> button::Appearance {
+        button::Appearance {
+            background: None,
+            text_color: self.fg,
+            border: Border { radius: 13.0.into(), color: Color::TRANSPARENT, width: 0.0 },
+            ..Default::default()
+        }
+    }
+    fn hovered(&self, s: &iced::Theme) -> button::Appearance {
+        let mut a = self.active(s);
+        if self.danger {
+            a.background = Some(Background::Color(Color { r: 0.85, g: 0.18, b: 0.18, a: 0.88 }));
+            a.text_color = Color::WHITE;
+        } else {
+            a.background = Some(Background::Color(Color { a: 0.15, ..self.fg }));
+        }
+        a
+    }
+    fn pressed(&self, s: &iced::Theme) -> button::Appearance { self.hovered(s) }
+    fn disabled(&self, s: &iced::Theme) -> button::Appearance { self.active(s) }
 }
 
 pub struct SettingsCard(pub Palette);

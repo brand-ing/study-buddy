@@ -1,6 +1,6 @@
 [package]
 name = "focus-app"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 
 [[bin]]
@@ -19,5 +19,5 @@ tray-icon = "0.19"
 global-hotkey = "0.6"
 winrt-notification = "0.4"
 winreg = "0.52"
-windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_System_Threading"] }
 ureq = "2"

@@ -16,7 +16,8 @@ The app lives in your system tray. To keep it around permanently, move `focus.ex
 
 - **Pomodoro timer** — Classic (25/5/15), Deep Work (50/10), Balanced (45/15), or custom
 - **To-do list** — add, check off, reorder by drag, double-click to edit
-- **Task dock** — a taller scrollable panel that pops up from the tray (`Shift+2` to open, `Shift+1` for the main window)
+- **Task dock** — a taller scrollable panel that pops up from the tray (`Ctrl+2` to open, `Ctrl+1` for the main window)
+- **Glance** — a tiny draggable timer capsule (`Ctrl+3`) showing the phase and countdown; fills green as a work session runs out, digits go gray while paused
 - **Activity heatmap** — 16-week GitHub-style graph, one square per day
 - **Six time-of-day themes** — Sunrise · Morning · Afternoon · Evening · Night · Late Night
 - **System tray** — live countdown tooltip, pause/resume, show tasks without opening the main window
@@ -28,11 +29,12 @@ The app lives in your system tray. To keep it around permanently, move `focus.ex
 | Key | Action |
 |---|---|
 | `Space` | Start / pause timer |
-| `R` | Reset timer |
-| `S` | Skip phase |
+| `Ctrl+R` | Reset timer |
+| `Ctrl+S` | Skip phase |
 | `← →` | Switch tabs |
-| `Shift+1` | Main window |
-| `Shift+2` | Task dock |
+| `Ctrl+1` | Main window |
+| `Ctrl+2` | Task dock |
+| `Ctrl+3` | Glance (mini timer) |
 | `Ctrl+Shift+F` | Show / hide (global) |
 | `?` | Shortcuts panel |
 | `Esc` | Close panel |

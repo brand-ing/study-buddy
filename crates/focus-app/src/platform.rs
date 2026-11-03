@@ -120,13 +120,76 @@ pub fn update_tray(phase: Phase, running: bool, remaining: u32) {
     }
 }
 
-pub fn get_dock_position(dock_width: f32, dock_height: f32) -> (f32, f32) {
+// ── Window placement ──────────────────────────────────────────────────────
+//
+// Win32 reports physical pixels, but iced's resize/move_to take logical
+// pixels, so everything here is divided by the window's DPI scale. The
+// work area (monitor minus taskbar) of the monitor the window is on is used,
+// so placement is correct on laptops with 125%/150% scaling and multi-monitor.
+
+/// Work area of the window's monitor in logical pixels: (left, top, right, bottom).
+fn work_area() -> (f32, f32, f32, f32) {
     unsafe {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-        let sw = GetSystemMetrics(SM_CXSCREEN) as f32;
-        let sh = GetSystemMetrics(SM_CYSCREEN) as f32;
-        (sw - dock_width - 10.0, sh - dock_height - 50.0)
+        use windows_sys::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromWindow, MONITORINFO,
+            MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+        };
+        let hwnd = find_window();
+        let flags = if hwnd != 0 { MONITOR_DEFAULTTONEAREST } else { MONITOR_DEFAULTTOPRIMARY };
+        let monitor = MonitorFromWindow(hwnd, flags);
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let s = scale();
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return (0.0, 0.0, 1280.0 / s, 720.0 / s);
+        }
+        let r = info.rcWork;
+        (r.left as f32 / s, r.top as f32 / s, r.right as f32 / s, r.bottom as f32 / s)
     }
+}
+
+/// DPI scale factor of the window (1.0 = 100%, 1.5 = 150%).
+fn scale() -> f32 {
+    unsafe {
+        use windows_sys::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
+        let hwnd = find_window();
+        let dpi = if hwnd != 0 { GetDpiForWindow(hwnd) } else { GetDpiForSystem() };
+        if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 }
+    }
+}
+
+const SCREEN_MARGIN: f32 = 10.0;
+
+/// Bottom-right corner of the work area for the task dock. Returns the
+/// logical (x, y, height); the height shrinks to fit short screens.
+pub fn dock_rect(width: f32, height: f32) -> (f32, f32, f32) {
+    let (left, top, right, bottom) = work_area();
+    let h = height.min(bottom - top - SCREEN_MARGIN * 2.0).max(200.0);
+    let x = (right - width - SCREEN_MARGIN).max(left);
+    let y = (bottom - h - SCREEN_MARGIN).max(top);
+    (x, y, h)
+}
+
+/// Where to put the window after it changes to `width` x `height`: keeps it
+/// horizontally centred on where it is now and clamps it inside the work area.
+pub fn fit_on_screen(width: f32, height: f32) -> (f32, f32) {
+    let (left, top, right, bottom) = work_area();
+    let (mut x, mut y) = (left + SCREEN_MARGIN, top + SCREEN_MARGIN);
+    unsafe {
+        use windows_sys::Win32::Foundation::RECT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
+        let hwnd = find_window();
+        let mut r: RECT = std::mem::zeroed();
+        if hwnd != 0 && GetWindowRect(hwnd, &mut r) != 0 {
+            let s = scale();
+            let cur_cx = (r.left + r.right) as f32 / 2.0 / s;
+            x = cur_cx - width / 2.0;
+            y = r.top as f32 / s;
+        }
+    }
+    let x = x.min(right - width - SCREEN_MARGIN).max(left);
+    let y = y.min(bottom - height - SCREEN_MARGIN).max(top);
+    (x, y)
 }
 
 // ── Global hotkey ─────────────────────────────────────────────────────────
@@ -149,26 +212,58 @@ pub fn show_hotkey_id() -> Option<u32> {
 
 // ── Window visibility ─────────────────────────────────────────────────────
 
+fn find_window() -> windows_sys::Win32::Foundation::HWND {
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW;
+        let title: Vec<u16> = "focus\0".encode_utf16().collect();
+        FindWindowW(std::ptr::null(), title.as_ptr())
+    }
+}
+
 pub fn hide_window() {
     unsafe {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowW, ShowWindow, SW_HIDE};
-        let title: Vec<u16> = "focus\0".encode_utf16().collect();
-        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
+        use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        let hwnd = find_window();
         if hwnd != 0 { ShowWindow(hwnd, SW_HIDE); }
     }
 }
 
 pub fn show_window() {
     unsafe {
+        use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            FindWindowW, ShowWindow, SetForegroundWindow, SW_RESTORE,
+            BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId,
+            SetForegroundWindow, ShowWindow, SW_RESTORE,
         };
-        let title: Vec<u16> = "focus\0".encode_utf16().collect();
-        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
-        if hwnd != 0 {
-            ShowWindow(hwnd, SW_RESTORE);
-            SetForegroundWindow(hwnd);
-        }
+        let hwnd = find_window();
+        if hwnd == 0 { return; }
+        // Windows refuses SetForegroundWindow from a background app unless
+        // its input is attached to the current foreground thread, which is
+        // why showing only "often" worked before.
+        let fg_thread = GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut());
+        let me = GetCurrentThreadId();
+        let attached = fg_thread != 0 && fg_thread != me && AttachThreadInput(me, fg_thread, 1) != 0;
+        ShowWindow(hwnd, SW_RESTORE);
+        BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        if attached { AttachThreadInput(me, fg_thread, 0); }
+    }
+}
+
+/// Visible on screen (not hidden to tray or minimised).
+pub fn is_window_shown() -> bool {
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
+        let hwnd = find_window();
+        hwnd != 0 && IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0
+    }
+}
+
+pub fn is_foreground() -> bool {
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        let hwnd = find_window();
+        hwnd != 0 && GetForegroundWindow() == hwnd
     }
 }
 
